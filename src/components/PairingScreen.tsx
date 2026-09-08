@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 
@@ -27,31 +26,69 @@ function generatePairingCode(): string {
 export function PairingScreen() {
   const [partnerCode, setPartnerCode] = useState('');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [activePairingRowId, setActivePairingRowId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
 
   const setPairingId = useAuthStore((state) => state.setPairingId);
-  const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // Clean up channel on unmount
+  // Lifecycle Management: Channel subscription tied to activePairingRowId
   useEffect(() => {
-    return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-      }
-    };
-  }, []);
+    if (!activePairingRowId) return;
 
-  // Wire "Generate Invite" with Realtime Socket listener
+    console.log(`[Realtime] Initializing channel for pairing id: ${activePairingRowId}`);
+
+    const channel = supabase
+      .channel(`pairing:${activePairingRowId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'pairings',
+          filter: `id=eq.${activePairingRowId}`,
+        },
+        (payload) => {
+          console.log('REALTIME PAYLOAD RECEIVED:', payload);
+
+          // If status changed to 'active', update Zustand store to trigger Dashboard mount
+          if (payload.new && (payload.new as any).status === 'active') {
+            console.log("[Realtime] Status transitioned to 'active'! Mounting Dashboard...");
+            setPairingId(activePairingRowId);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        // Graceful Degradation: discrete state handling without fatal exceptions
+        switch (status) {
+          case 'SUBSCRIBED':
+            console.log(`[Realtime] Status: SUBSCRIBED to pairing:${activePairingRowId}`);
+            break;
+          case 'CHANNEL_ERROR':
+            console.warn(`[Realtime] Status: CHANNEL_ERROR for pairing:${activePairingRowId}:`, err?.message || err);
+            break;
+          case 'TIMED_OUT':
+            console.warn(`[Realtime] Status: TIMED_OUT for pairing:${activePairingRowId}. Waiting for reconnect...`);
+            break;
+          case 'CLOSED':
+            console.log(`[Realtime] Status: CLOSED for pairing:${activePairingRowId}`);
+            break;
+          default:
+            console.log(`[Realtime] Status: ${status}`);
+        }
+      });
+
+    // The Teardown: Cleanly remove WebSocket channel on unmount or dependency change
+    return () => {
+      console.log(`[Realtime] Teardown: cleanly removing channel pairing:${activePairingRowId}`);
+      supabase.removeChannel(channel);
+    };
+  }, [activePairingRowId, setPairingId]);
+
+  // Wire "Generate Invite"
   const handleGenerateInvite = async () => {
     setIsGenerating(true);
     try {
-      // Unsubscribe from any previous channel before creating a new one
-      if (channelRef.current) {
-        await supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
-
       const code = generatePairingCode();
       const { data: userData } = await supabase.auth.getUser();
 
@@ -73,40 +110,9 @@ export function PairingScreen() {
         return;
       }
 
-      // 2. Update local UI state
+      // 2. Update local UI state & trigger useEffect lifecycle
       setGeneratedCode(code);
-
-      // 3. Initialize Realtime channel listening to UPDATE events on the newly generated row
-      console.log(`[Realtime] Initializing channel for pairing id: ${data.id}`);
-
-      const channel = supabase
-        .channel(`pairing:${data.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'pairings',
-            filter: `id=eq.${data.id}`,
-          },
-          (payload) => {
-            console.log("REALTIME PAYLOAD RECEIVED:", payload);
-
-            // 4. If status changed to 'active', update Zustand store to trigger Dashboard mount
-            if (payload.new && (payload.new as any).status === 'active') {
-              console.log("[Realtime] Status transitioned to 'active'! Mounting Dashboard...");
-              setPairingId(data.id);
-            }
-          }
-        )
-        .subscribe((status, err) => {
-          console.log("Subscription status:", status);
-          if (err) {
-            console.error("Subscription error:", err);
-          }
-        });
-
-      channelRef.current = channel;
+      setActivePairingRowId(data.id);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to generate invite code.');
     } finally {
