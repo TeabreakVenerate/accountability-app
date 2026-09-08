@@ -11,6 +11,7 @@ interface AuthGuardProps {
 export function AuthGuard({ children }: AuthGuardProps) {
   const [loading, setLoading] = useState(true);
   const session = useAuthStore((state) => state.session);
+  const pairingId = useAuthStore((state) => state.pairingId);
   const setSession = useAuthStore((state) => state.setSession);
 
   useEffect(() => {
@@ -41,7 +42,8 @@ export function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  if (!session) {
+  // Render PairingScreen if neither active session nor pairingId is established
+  if (!session && !pairingId) {
     return <PairingScreen />;
   }
 

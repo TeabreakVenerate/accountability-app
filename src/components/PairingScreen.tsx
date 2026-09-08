@@ -8,29 +8,137 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
+
+// Helper: Generate a random 6-character alphanumeric pairing code
+function generatePairingCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoid ambiguous chars (I, 1, O, 0)
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
 
 export function PairingScreen() {
   const [partnerCode, setPartnerCode] = useState('');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+
   const setPairingId = useAuthStore((state) => state.setPairingId);
 
-  const handleGenerateInvite = () => {
-    // Generate a secure 6-character alphanumeric pairing token
-    const token = 'ACC-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    setGeneratedCode(token);
-    setPairingId(token);
+  // Wire "Generate Invite"
+  const handleGenerateInvite = async () => {
+    setIsGenerating(true);
+    try {
+      const code = generatePairingCode();
+      const { data: userData } = await supabase.auth.getUser();
+
+      const { data, error } = await supabase
+        .from('pairings')
+        .insert([
+          {
+            pairing_code: code,
+            status: 'pending',
+            user_1_id: userData?.user?.id ?? null,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        Alert.alert('Database Error', error.message);
+        return;
+      }
+
+      setGeneratedCode(code);
+      if (data?.id) {
+        // Subscribe to pairing status changes in Realtime for User 1
+        supabase
+          .channel(`pairing-${data.id}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'pairings',
+              filter: `id=eq.${data.id}`,
+            },
+            (payload) => {
+              if (payload.new && payload.new.status === 'active') {
+                setPairingId(data.id);
+              }
+            }
+          )
+          .subscribe();
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to generate invite code.');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
-  const handleJoinPartner = () => {
-    const trimmed = partnerCode.trim();
-    if (!trimmed) {
-      Alert.alert('Validation', 'Please enter a valid partner invite code.');
+  // Wire "Connect Partner"
+  const handleJoinPartner = async () => {
+    const trimmed = partnerCode.trim().toUpperCase();
+    if (!trimmed || trimmed.length < 6) {
+      Alert.alert('Validation Error', 'Please enter a valid 6-character partner invite code.');
       return;
     }
-    setPairingId(trimmed);
-    Alert.alert('Success', `Connected to partner session: ${trimmed}`);
+
+    setIsJoining(true);
+    try {
+      // 1. Query Supabase for the entered pairing_code
+      const { data, error } = await supabase
+        .from('pairings')
+        .select('*')
+        .eq('pairing_code', trimmed)
+        .maybeSingle();
+
+      if (error) {
+        Alert.alert('Query Error', error.message);
+        return;
+      }
+
+      if (!data) {
+        Alert.alert('Code Not Found', 'The entered pairing code does not exist. Please check and try again.');
+        return;
+      }
+
+      // 2. Check if status is pending
+      if (data.status !== 'pending') {
+        Alert.alert('Unavailable', 'This pairing invite has already been used or expired.');
+        return;
+      }
+
+      // 3. Update status to active and assign user_2_id
+      const { data: userData } = await supabase.auth.getUser();
+      const { error: updateError } = await supabase
+        .from('pairings')
+        .update({
+          status: 'active',
+          user_2_id: userData?.user?.id ?? null,
+        })
+        .eq('id', data.id);
+
+      if (updateError) {
+        Alert.alert('Update Error', updateError.message);
+        return;
+      }
+
+      // 4. Update Zustand useAuthStore with pairingId to trigger navigation
+      setPairingId(data.id);
+      Alert.alert('Success', 'Connected to accountability partner!');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to connect with partner.');
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   return (
@@ -58,22 +166,27 @@ export function PairingScreen() {
             </Text>
             <TouchableOpacity
               onPress={handleGenerateInvite}
+              disabled={isGenerating}
               activeOpacity={0.85}
               className="bg-[#f5b212] py-4 rounded-xl items-center justify-center shadow-md"
             >
-              <Text className="text-[#003049] font-bold text-lg tracking-wide uppercase">
-                Generate Invite
-              </Text>
+              {isGenerating ? (
+                <ActivityIndicator color="#003049" />
+              ) : (
+                <Text className="text-[#003049] font-bold text-lg tracking-wide uppercase">
+                  Generate Invite
+                </Text>
+              )}
             </TouchableOpacity>
 
             {generatedCode && (
-              <View className="mt-4 p-3 bg-[#001724] rounded-xl border border-[#f5b212]/40 items-center">
-                <Text className="text-xs text-gray-400 mb-1">Your Pairing Token:</Text>
-                <Text className="text-xl font-bold text-[#f5b212] tracking-widest selectable">
+              <View className="mt-4 p-4 bg-[#001724] rounded-xl border border-[#f5b212]/40 items-center">
+                <Text className="text-xs text-gray-400 mb-1">Your 6-Character Pairing Code:</Text>
+                <Text className="text-2xl font-bold text-[#f5b212] tracking-widest selectable">
                   {generatedCode}
                 </Text>
-                <Text className="text-[11px] text-gray-400 mt-1">
-                  Share this code with your accountability partner.
+                <Text className="text-[11px] text-gray-400 mt-2 text-center">
+                  Share this code with your partner. Waiting for partner to connect...
                 </Text>
               </View>
             )}
@@ -96,20 +209,26 @@ export function PairingScreen() {
             <TextInput
               value={partnerCode}
               onChangeText={setPartnerCode}
-              placeholder="e.g. ACC-X9K2L1"
+              placeholder="e.g. 7XK9A2"
               placeholderTextColor="#64748b"
               autoCapitalize="characters"
               autoCorrect={false}
-              className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3.5 rounded-xl text-base mb-3 font-mono"
+              maxLength={6}
+              className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3.5 rounded-xl text-base mb-3 font-mono tracking-widest text-center"
             />
             <TouchableOpacity
               onPress={handleJoinPartner}
+              disabled={isJoining}
               activeOpacity={0.8}
-              className="border border-[#f5b212] py-3.5 rounded-xl items-center justify-center"
+              className="border border-[#f5b212] py-3.5 rounded-xl items-center justify-center bg-[#f5b212]/10"
             >
-              <Text className="text-[#f5b212] font-semibold text-base tracking-wide">
-                Connect Partner
-              </Text>
+              {isJoining ? (
+                <ActivityIndicator color="#f5b212" />
+              ) : (
+                <Text className="text-[#f5b212] font-semibold text-base tracking-wide">
+                  Connect Partner
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
