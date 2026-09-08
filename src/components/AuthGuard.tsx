@@ -3,14 +3,14 @@ import { View, ActivityIndicator } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 import { PairingScreen } from './PairingScreen';
+import { Dashboard } from './Dashboard';
 
 interface AuthGuardProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }
 
 export function AuthGuard({ children }: AuthGuardProps) {
   const [loading, setLoading] = useState(true);
-  const session = useAuthStore((state) => state.session);
   const pairingId = useAuthStore((state) => state.pairingId);
   const setSession = useAuthStore((state) => state.setSession);
 
@@ -42,10 +42,10 @@ export function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  // Render PairingScreen if neither active session nor pairingId is established
-  if (!session && !pairingId) {
-    return <PairingScreen />;
+  // Routing condition: If paired, mount Dashboard. If not, mount PairingScreen.
+  if (pairingId) {
+    return <Dashboard />;
   }
 
-  return <>{children}</>;
+  return <PairingScreen />;
 }

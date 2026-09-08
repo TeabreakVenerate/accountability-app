@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,12 +10,13 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 
 // Helper: Generate a random 6-character alphanumeric pairing code
 function generatePairingCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoid ambiguous chars (I, 1, O, 0)
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -30,14 +31,31 @@ export function PairingScreen() {
   const [isJoining, setIsJoining] = useState(false);
 
   const setPairingId = useAuthStore((state) => state.setPairingId);
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // Wire "Generate Invite"
+  // Clean up channel on unmount
+  useEffect(() => {
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
+    };
+  }, []);
+
+  // Wire "Generate Invite" with Realtime Socket listener
   const handleGenerateInvite = async () => {
     setIsGenerating(true);
     try {
+      // Unsubscribe from any previous channel before creating a new one
+      if (channelRef.current) {
+        await supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+
       const code = generatePairingCode();
       const { data: userData } = await supabase.auth.getUser();
 
+      // 1. Insert new row with status 'pending'
       const { data, error } = await supabase
         .from('pairings')
         .insert([
@@ -55,27 +73,40 @@ export function PairingScreen() {
         return;
       }
 
+      // 2. Update local UI state
       setGeneratedCode(code);
-      if (data?.id) {
-        // Subscribe to pairing status changes in Realtime for User 1
-        supabase
-          .channel(`pairing-${data.id}`)
-          .on(
-            'postgres_changes',
-            {
-              event: 'UPDATE',
-              schema: 'public',
-              table: 'pairings',
-              filter: `id=eq.${data.id}`,
-            },
-            (payload) => {
-              if (payload.new && payload.new.status === 'active') {
-                setPairingId(data.id);
-              }
+
+      // 3. Initialize Realtime channel listening to UPDATE events on the newly generated row
+      console.log(`[Realtime] Initializing channel for pairing id: ${data.id}`);
+
+      const channel = supabase
+        .channel(`pairing:${data.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'pairings',
+            filter: `id=eq.${data.id}`,
+          },
+          (payload) => {
+            console.log("REALTIME PAYLOAD RECEIVED:", payload);
+
+            // 4. If status changed to 'active', update Zustand store to trigger Dashboard mount
+            if (payload.new && (payload.new as any).status === 'active') {
+              console.log("[Realtime] Status transitioned to 'active'! Mounting Dashboard...");
+              setPairingId(data.id);
             }
-          )
-          .subscribe();
-      }
+          }
+        )
+        .subscribe((status, err) => {
+          console.log("Subscription status:", status);
+          if (err) {
+            console.error("Subscription error:", err);
+          }
+        });
+
+      channelRef.current = channel;
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to generate invite code.');
     } finally {
@@ -133,7 +164,6 @@ export function PairingScreen() {
 
       // 4. Update Zustand useAuthStore with pairingId to trigger navigation
       setPairingId(data.id);
-      Alert.alert('Success', 'Connected to accountability partner!');
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');
     } finally {
@@ -186,7 +216,7 @@ export function PairingScreen() {
                   {generatedCode}
                 </Text>
                 <Text className="text-[11px] text-gray-400 mt-2 text-center">
-                  Share this code with your partner. Waiting for partner to connect...
+                  Share this code with your partner. Realtime listener active — waiting for partner to connect...
                 </Text>
               </View>
             )}
