@@ -558,7 +558,14 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
             onPress={handleConfirmTargets}
             disabled={isSaving || isLoading}
             activeOpacity={0.88}
-            className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center shadow-lg"
+            className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.2,
+              shadowRadius: 10,
+              elevation: 6,
+            }}
           >
             {isSaving ? (
               <ActivityIndicator color="#003049" />

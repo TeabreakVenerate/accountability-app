@@ -25,6 +25,7 @@ interface AuthState {
   isLocked: boolean; // Remote lock status synced with Supabase is_locked
   bypassPin: string | null;
   hasHydrated: boolean;
+  hasCompletedOnboarding: boolean;
 
   setSession: (session: Session | null) => void;
   setPairingId: (pairingId: string | null) => void;
@@ -40,6 +41,7 @@ interface AuthState {
   setIsLocked: (isLocked: boolean) => void;
   setBypassPin: (pin: string | null) => void;
   setHasHydrated: (hydrated: boolean) => void;
+  completeOnboarding: () => void;
   resetPairing: () => void;
 }
 
@@ -60,6 +62,7 @@ export const useAuthStore = create<AuthState>()(
       isLocked: false,
       bypassPin: null,
       hasHydrated: false,
+      hasCompletedOnboarding: false,
 
       setSession: (session) => set({ session }),
       setPairingId: (pairingId) => set({ pairingId }),
@@ -75,6 +78,7 @@ export const useAuthStore = create<AuthState>()(
       setIsLocked: (isLocked) => set({ isLocked }),
       setBypassPin: (bypassPin) => set({ bypassPin }),
       setHasHydrated: (hasHydrated) => set({ hasHydrated }),
+      completeOnboarding: () => set({ hasCompletedOnboarding: true }),
 
       resetPairing: () =>
         set({
@@ -99,6 +103,7 @@ export const useAuthStore = create<AuthState>()(
         state?.setHasHydrated(true);
       },
       partialize: (state) => ({
+        hasCompletedOnboarding: state.hasCompletedOnboarding,
         pairingId: state.pairingId,
         pairingCode: state.pairingCode,
         pairingMode: state.pairingMode,

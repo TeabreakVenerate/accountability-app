@@ -18,9 +18,35 @@ import { supabase } from '../lib/supabase';
 import { NativeSentinel } from '../lib/NativeSentinel';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
+// Common elevated card shadow using native style objects (prevents NativeWind dynamic shadow context crash)
+const elevatedCardStyle = {
+  backgroundColor: '#004060',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.2,
+  shadowRadius: 10,
+  elevation: 6,
+};
+
+const heroShieldStyle = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 10 },
+  shadowOpacity: 0.35,
+  shadowRadius: 18,
+  elevation: 12,
+};
+
+const masterButtonStyle = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.3,
+  shadowRadius: 14,
+  elevation: 8,
+};
+
 export function Dashboard() {
   const pairingId = useAuthStore((state) => state.pairingId);
-  const setPairingId = useAuthStore((state) => state.setPairingId);
+  const pairingCode = useAuthStore((state) => state.pairingCode);
   const pairingMode = useAuthStore((state) => state.pairingMode);
   const setPairingMode = useAuthStore((state) => state.setPairingMode);
   const userRole = useAuthStore((state) => state.userRole);
@@ -36,9 +62,9 @@ export function Dashboard() {
   const bypassPin = useAuthStore((state) => state.bypassPin);
   const setBypassPin = useAuthStore((state) => state.setBypassPin);
   const resetPairing = useAuthStore((state) => state.resetPairing);
-  const hasHydrated = useAuthStore((state) => state.hasHydrated);
 
   const [isTogglingLock, setIsTogglingLock] = useState(false);
+  const [isSentinelServiceRunning, setIsSentinelServiceRunning] = useState(false);
 
   // Emergency Bypass Modal State
   const [showBypassModal, setShowBypassModal] = useState(false);
@@ -62,18 +88,32 @@ export function Dashboard() {
     }
   }, []);
 
+  // Check Sentinel background running state
+  const checkSentinelStatus = useCallback(async () => {
+    try {
+      const running = await NativeSentinel.isSentinelRunning();
+      setIsSentinelServiceRunning(running);
+      if (running && !isLockdownActive) {
+        setIsLockdownActive(true);
+      }
+    } catch (err) {
+      console.warn('[Dashboard] Sentinel check error:', err);
+    }
+  }, [isLockdownActive, setIsLockdownActive]);
+
   useEffect(() => {
     checkClearances();
+    checkSentinelStatus();
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active') checkClearances();
+      if (next === 'active') {
+        checkClearances();
+        checkSentinelStatus();
+      }
     });
     return () => sub.remove();
-  }, [checkClearances]);
+  }, [checkClearances, checkSentinelStatus]);
 
-  // Calculate local user role authority
-  // In Warden mode: user_1 is Warden, user_2 is Prisoner
-  // In Prisoner mode: user_1 is Prisoner, user_2 is Warden
-  // In Mutual mode: both can initiate and are both subject to lock
+  // Authority rules
   const isWarden =
     pairingMode === 'Warden'
       ? userRole === 'user_1'
@@ -134,6 +174,7 @@ export function Dashboard() {
           console.log('[Dashboard Boot] Restoring active Sentinel with offline persistence...');
           await NativeSentinel.startSentinel(localTargets, true, -1);
           setIsLockdownActive(true);
+          setIsSentinelServiceRunning(true);
         }
       }
     } catch (err) {
@@ -151,16 +192,10 @@ export function Dashboard() {
     setIsLockdownActive,
   ]);
 
-  // Sync with native sentinel status & initial targets on mount
+  // Sync initial targets on mount
   useEffect(() => {
     loadPairingTargets();
-
-    NativeSentinel.isSentinelRunning().then((running) => {
-      if (running && !isLockdownActive) {
-        setIsLockdownActive(true);
-      }
-    });
-  }, [loadPairingTargets, isLockdownActive, setIsLockdownActive]);
+  }, [loadPairingTargets]);
 
   // Realtime subscription for remote pairing updates
   useEffect(() => {
@@ -176,7 +211,7 @@ export function Dashboard() {
       supabase.removeChannel(existing);
     }
 
-    // 1. Initialize channel and chain all .on() listeners first
+    // Initialize channel and chain all .on() listeners first
     const channel = supabase
       .channel(channelName)
       .on(
@@ -230,24 +265,26 @@ export function Dashboard() {
                 console.log('[Dashboard Realtime] Engaging Sentinel with offline persistence...');
                 await NativeSentinel.startSentinel(targets, true, -1);
                 setIsLockdownActive(true);
+                setIsSentinelServiceRunning(true);
               }
             } else if (!row.is_locked) {
               console.log('[Dashboard Realtime] Remote lockdown disengaged. Stopping Sentinel...');
               await NativeSentinel.stopSentinel();
               setIsLockdownActive(false);
+              setIsSentinelServiceRunning(false);
             }
           }
         }
       );
 
-    // 2. Call .subscribe() at the very end
+    // Call .subscribe() at the end
     channel.subscribe((status, err) => {
       if (status === 'CHANNEL_ERROR') {
         console.warn(`[Dashboard Realtime] Channel error for ${channelName}:`, err?.message || err);
       }
     });
 
-    // 3. Guaranteed cleanup on unmount
+    // Cleanup on unmount
     return () => {
       console.log(`[Dashboard Realtime] Teardown: removing channel ${channelName}`);
       supabase.removeChannel(channel);
@@ -304,9 +341,11 @@ export function Dashboard() {
         if (nextLockedState && myTargets.length > 0) {
           await NativeSentinel.startSentinel(myTargets, true, -1);
           setIsLockdownActive(true);
+          setIsSentinelServiceRunning(true);
         } else {
           await NativeSentinel.stopSentinel();
           setIsLockdownActive(false);
+          setIsSentinelServiceRunning(false);
         }
       }
 
@@ -338,6 +377,7 @@ export function Dashboard() {
       await NativeSentinel.stopSentinel();
       setIsLockdownActive(false);
       setIsLocked(false);
+      setIsSentinelServiceRunning(false);
 
       if (pairingId) {
         await supabase
@@ -381,6 +421,7 @@ export function Dashboard() {
             try {
               await NativeSentinel.stopSentinel();
               setIsLockdownActive(false);
+              setIsSentinelServiceRunning(false);
 
               if (pairingId) {
                 await supabase
@@ -403,7 +444,22 @@ export function Dashboard() {
   const hasMissingPermissions =
     !permissions.hasOverlay || !permissions.hasUsage || !permissions.hasBatteryExemption;
 
-  // 1. Unpaired State: High-Conviction Onboarding View
+  const effectiveTargets = partnerTargets.length > 0 ? partnerTargets : myTargets;
+  const isEnforcing = isLocked || isLockdownActive || isSentinelServiceRunning;
+
+  // Determine role label
+  const roleTitle =
+    pairingMode === 'Warden'
+      ? userRole === 'user_1'
+        ? 'Warden (Enforcer)'
+        : 'Prisoner (Disciplined)'
+      : pairingMode === 'Prisoner'
+      ? userRole === 'user_1'
+        ? 'Prisoner (Disciplined)'
+        : 'Warden (Enforcer)'
+      : 'Mutual Partner';
+
+  // 1. UNPAIRED STATE VIEW
   if (!pairingId) {
     return (
       <SafeAreaView className="flex-1 bg-[#003049]">
@@ -414,148 +470,182 @@ export function Dashboard() {
         >
           {/* Hero Branding */}
           <View className="items-center mb-8">
-            <View className="w-16 h-16 rounded-3xl bg-[#002236] border-2 border-[#f5b212] items-center justify-center mb-4 shadow-xl">
-              <Text className="text-3xl">🛡️</Text>
+            <View
+              className="w-24 h-24 rounded-full bg-[#002236] border-2 border-[#f5b212] items-center justify-center mb-4"
+              style={heroShieldStyle}
+            >
+              <Text className="text-4xl">🛡️</Text>
             </View>
-            <View className="bg-[#002236] border border-[#f5b212]/30 px-3.5 py-1 rounded-full mb-3">
-              <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-widest">
-                Accountability v1.0
+            <View className="bg-[#002236] border border-[#f5b212]/40 px-3.5 py-1 rounded-full mb-3">
+              <Text className="text-[10px] font-mono font-bold text-[#f5b212] uppercase tracking-widest">
+                SYSTEM STANDBY • UNPAIRED
               </Text>
             </View>
             <Text className="text-3xl font-black tracking-widest text-[#f5b212] uppercase text-center">
-              Welcome to Accountability
+              Command Center
             </Text>
-            <Text className="text-xs text-gray-300 mt-2.5 text-center max-w-[300px] leading-5">
-              The high-conviction peer accountability system. Pair with a trusted partner to lock distracting apps with native OS enforcement.
+            <Text className="text-xs text-gray-300 mt-2 text-center max-w-[310px] leading-5">
+              No active accountability link detected. Establish an encrypted handshake with your partner to engage hardware enforcement.
             </Text>
           </View>
 
-          {/* Feature Highlights Card */}
-          <View className="bg-[#002236] border border-[#f5b212]/20 rounded-2xl p-5 mb-8 shadow-xl gap-4">
-            <View className="flex-row items-center">
-              <View className="w-9 h-9 rounded-xl bg-[#001724] border border-[#f5b212]/40 items-center justify-center mr-3">
-                <Text className="text-base">🤝</Text>
+          {/* Telemetry Preview Grid */}
+          <View className="mb-8">
+            <Text className="text-[11px] font-mono font-bold text-gray-400 uppercase tracking-widest mb-3 text-center">
+              TELEMETRY ENGINE PREVIEW
+            </Text>
+            <View className="flex-row gap-3 mb-3">
+              <View
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4"
+                style={elevatedCardStyle}
+              >
+                <Text className="text-xl mb-1">🎯</Text>
+                <Text className="text-white font-bold text-sm">Monitored Apps</Text>
+                <Text className="text-[11px] text-gray-300 mt-0.5">0 Apps Configured</Text>
               </View>
-              <View className="flex-1">
-                <Text className="text-sm font-bold text-white">Peer-to-Peer Link</Text>
-                <Text className="text-xs text-gray-400">
-                  Connect securely via 6-character cryptographic pairing codes.
-                </Text>
-              </View>
-            </View>
-
-            <View className="flex-row items-center">
-              <View className="w-9 h-9 rounded-xl bg-[#001724] border border-[#f5b212]/40 items-center justify-center mr-3">
-                <Text className="text-base">🔒</Text>
-              </View>
-              <View className="flex-1">
-                <Text className="text-sm font-bold text-white">Native Android Sentinel</Text>
-                <Text className="text-xs text-gray-400">
-                  Background service draws an un-dismissible overlay with offline persistence.
-                </Text>
+              <View
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4"
+                style={elevatedCardStyle}
+              >
+                <Text className="text-xl mb-1">🤝</Text>
+                <Text className="text-white font-bold text-sm">Partner Link</Text>
+                <Text className="text-[11px] text-amber-400 mt-0.5">Awaiting Pair</Text>
               </View>
             </View>
-
-            <View className="flex-row items-center">
-              <View className="w-9 h-9 rounded-xl bg-[#001724] border border-[#f5b212]/40 items-center justify-center mr-3">
-                <Text className="text-base">⚖️</Text>
+            <View className="flex-row gap-3">
+              <View
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4"
+                style={elevatedCardStyle}
+              >
+                <Text className="text-xl mb-1">⚡</Text>
+                <Text className="text-white font-bold text-sm">Sentinel Daemon</Text>
+                <Text className="text-[11px] text-gray-300 mt-0.5">Hardware Standby</Text>
               </View>
-              <View className="flex-1">
-                <Text className="text-sm font-bold text-white">Anti-Tampering Matrix</Text>
-                <Text className="text-xs text-gray-400">
-                  Settings lockout, native OS enforcement & battery exemption bypass.
-                </Text>
+              <View
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4"
+                style={elevatedCardStyle}
+              >
+                <Text className="text-xl mb-1">💬</Text>
+                <Text className="text-white font-bold text-sm">Partner Chat</Text>
+                <Text className="text-[11px] text-gray-300 mt-0.5">Encrypted Channel</Text>
               </View>
             </View>
           </View>
 
-          {/* Primary Action Button */}
+          {/* Action Buttons */}
           <TouchableOpacity
             onPress={() => router.push('/pairing')}
             activeOpacity={0.88}
-            className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center shadow-2xl mb-4"
+            className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center mb-3"
+            style={masterButtonStyle}
           >
-            <Text className="text-[#003049] font-black text-base uppercase tracking-wider">
-              Pair with Partner
+            <Text className="text-[#003049] font-black text-sm uppercase tracking-widest">
+              Pair with Partner →
             </Text>
           </TouchableOpacity>
 
-          <Text className="text-[11px] text-gray-500 text-center font-medium">
-            Requires Android 10+ with Draw Over Apps, Usage Stats & Battery Optimization clearance
-          </Text>
+          <TouchableOpacity
+            onPress={() => router.push('/apps')}
+            activeOpacity={0.8}
+            className="w-full bg-[#002236] border border-[#f5b212]/40 py-3.5 rounded-xl items-center justify-center"
+          >
+            <Text className="text-[#f5b212] font-bold text-xs uppercase tracking-wider">
+              Configure Target Applications
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // 2. Paired State: Command Center Dashboard
+  // 2. PAIRED COMMAND CENTER DASHBOARD
   return (
     <SafeAreaView className="flex-1 bg-[#003049]">
-      <ScrollView
-        contentContainerStyle={{ flexGrow: 1, justifyContent: 'space-between' }}
-        className="px-6 py-6"
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Top Section: Header & Badges */}
-        <View>
-          <View className="items-center mb-3">
-            <Text className="text-xs font-bold text-gray-400 tracking-widest uppercase mb-1">
-              COMMAND CENTER
-            </Text>
-            <Text className="text-xl font-black text-white tracking-wider uppercase">
-              {pairingMode ? `${pairingMode.toUpperCase()} MODE` : 'ACCOUNTABILITY LINK'}
-            </Text>
-          </View>
-
-          {/* Status Badges */}
-          <View className="flex-row items-center justify-center gap-2 mb-3 flex-wrap">
-            <View className="flex-row items-center bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-full">
-              <View className="w-2 h-2 rounded-full bg-emerald-400 mr-2" />
-              <Text className="text-emerald-400 font-semibold text-[11px] tracking-wider uppercase">
-                {userRole === 'user_1' ? 'User 1' : 'User 2'} •{' '}
-                {pairingMode === 'Warden'
-                  ? userRole === 'user_1'
-                    ? 'Warden'
-                    : 'Prisoner'
-                  : pairingMode === 'Prisoner'
-                  ? userRole === 'user_1'
-                    ? 'Prisoner'
-                    : 'Warden'
-                  : 'Mutual'}
-              </Text>
+      <View className="flex-1">
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
+          className="px-5 pt-3"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Top Bar: Session Identity & Disconnect */}
+          <View className="flex-row items-center justify-between mb-4">
+            <View className="flex-row items-center">
+              <View className="w-2.5 h-2.5 rounded-full bg-[#f5b212] mr-2" />
+              <View>
+                <Text className="text-[10px] font-mono font-bold text-gray-400 uppercase tracking-widest">
+                  ACCOUNTABILITY MATRIX
+                </Text>
+                <Text className="text-xs font-mono font-black text-[#f5b212]">
+                  CODE: {pairingCode || pairingId.slice(0, 8).toUpperCase()}
+                </Text>
+              </View>
             </View>
 
+            <TouchableOpacity
+              onPress={handleDisconnect}
+              activeOpacity={0.7}
+              className="bg-red-950/40 border border-red-500/40 px-3 py-1.5 rounded-lg"
+            >
+              <Text className="text-red-400 font-bold text-[10px] uppercase tracking-wider">
+                Disconnect
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* HERO SECTION: Central Visual Anchor */}
+          <View className="items-center mb-6 pt-2">
+            {/* Circular Shield Badge */}
             <View
-              className={`flex-row items-center border px-3 py-1.5 rounded-full ${
-                isLocked || isLockdownActive
-                  ? 'bg-amber-950/40 border-[#f5b212]'
-                  : 'bg-[#002236] border-gray-700'
+              className={`w-28 h-28 rounded-full items-center justify-center mb-3.5 border-4 ${
+                isEnforcing
+                  ? 'bg-red-950/90 border-[#f5b212]'
+                  : 'bg-[#002236] border-[#f5b212]'
+              }`}
+              style={heroShieldStyle}
+            >
+              <Text className="text-5xl">{isEnforcing ? '🔒' : '🛡️'}</Text>
+            </View>
+
+            {/* Status Headline */}
+            <View
+              className={`px-4 py-1.5 rounded-full border mb-2 flex-row items-center ${
+                isEnforcing
+                  ? 'bg-red-950/60 border-red-500'
+                  : 'bg-emerald-950/60 border-emerald-500'
               }`}
             >
               <View
                 className={`w-2 h-2 rounded-full mr-2 ${
-                  isLocked || isLockdownActive ? 'bg-[#f5b212]' : 'bg-gray-500'
+                  isEnforcing ? 'bg-red-400' : 'bg-emerald-400'
                 }`}
               />
               <Text
-                className={`font-semibold text-[11px] tracking-wider uppercase ${
-                  isLocked || isLockdownActive ? 'text-[#f5b212]' : 'text-gray-400'
+                className={`text-xs font-mono font-black uppercase tracking-widest ${
+                  isEnforcing ? 'text-red-400' : 'text-emerald-400'
                 }`}
               >
-                {isLocked || isLockdownActive ? 'Lockdown Active' : 'Sentinel Idle'}
+                {isEnforcing ? 'LOCKDOWN ACTIVE' : 'SYSTEM STANDBY'}
               </Text>
             </View>
+
+            <Text className="text-2xl font-black tracking-widest text-white uppercase text-center">
+              {isEnforcing ? 'Enforcement Engaged' : 'Sentinel Ready'}
+            </Text>
+
+            <Text className="text-xs text-gray-300 text-center mt-1 font-mono">
+              {pairingMode?.toUpperCase() || 'MUTUAL'} MODE • {roleTitle.toUpperCase()}
+            </Text>
           </View>
 
           {/* Missing OS Clearances Banner */}
           {hasMissingPermissions && (
-            <View className="mb-4 p-3.5 bg-amber-950/40 border border-[#f5b212] rounded-2xl flex-row items-center justify-between">
+            <View className="mb-4 p-3.5 bg-amber-950/50 border border-[#f5b212] rounded-2xl flex-row items-center justify-between">
               <View className="flex-1 mr-2">
                 <Text className="text-xs font-bold text-[#f5b212]">
-                  Security Clearance Required
+                  Security Clearances Incomplete
                 </Text>
                 <Text className="text-[10px] text-gray-300">
-                  Grant Overlay, Usage & Battery Exemption
+                  Grant Overlay, Usage Stats & Battery Exemption
                 </Text>
               </View>
               <TouchableOpacity
@@ -568,276 +658,318 @@ export function Dashboard() {
             </View>
           )}
 
-          {/* Quick Nav Controls: Chat & Target Apps */}
-          <View className="flex-row gap-2.5 mb-4">
-            <TouchableOpacity
-              onPress={() => router.push('/chat')}
-              activeOpacity={0.8}
-              className="flex-1 bg-[#002236] border border-[#f5b212]/30 p-3 rounded-xl flex-row items-center justify-center"
-            >
-              <Text className="text-base mr-2">💬</Text>
-              <Text className="text-xs font-bold text-white uppercase tracking-wider">
-                Partner Chat
+          {/* TELEMETRY GRID: 2x2 Elevated Metric Cards */}
+          <View className="mb-5">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-[11px] font-mono font-bold text-gray-400 uppercase tracking-widest">
+                TELEMETRY & HARDWARE STATUS
               </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => router.push('/apps')}
-              activeOpacity={0.8}
-              className="flex-1 bg-[#002236] border border-[#f5b212]/30 p-3 rounded-xl flex-row items-center justify-center"
-            >
-              <Text className="text-base mr-2">📱</Text>
-              <Text className="text-xs font-bold text-white uppercase tracking-wider">
-                Manage Apps
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Elevated Info Card */}
-          <View className="bg-[#002236] border border-[#f5b212]/20 rounded-2xl p-5 shadow-lg mb-6">
-            <View className="flex-row justify-between items-center mb-2">
-              <Text className="text-[11px] text-gray-400 tracking-wider uppercase font-semibold">
-                Pairing Session
-              </Text>
-              <Text className="text-xs font-bold text-[#f5b212] font-mono">
-                {pairingId?.slice(0, 13)}...
-              </Text>
+              <Text className="text-[10px] font-mono text-[#f5b212]">REALTIME SYNC</Text>
             </View>
 
-            <View className="h-[1px] bg-gray-800 my-2" />
-
-            {/* Target App Stats */}
-            <View className="flex-row justify-between items-center mb-2">
-              <View className="flex-1 mr-3">
-                <Text className="text-white font-bold text-sm">
-                  {myTargets.length} Local Target Apps Locked
-                </Text>
-                <Text className="text-[10px] text-gray-400 mt-0.5">
-                  Settings & installers locked against tampering
-                </Text>
-              </View>
+            {/* Row 1 */}
+            <View className="flex-row gap-3 mb-3">
+              {/* Card 1: Monitored Targets */}
               <TouchableOpacity
                 onPress={() => router.push('/apps')}
-                activeOpacity={0.7}
-                className="bg-[#f5b212]/15 border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
+                activeOpacity={0.85}
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
+                style={elevatedCardStyle}
               >
-                <Text className="text-xs text-[#f5b212] font-semibold">Configure</Text>
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-2xl">🎯</Text>
+                  <View className="bg-[#002236] border border-[#f5b212]/40 px-2 py-0.5 rounded">
+                    <Text className="text-[9px] font-mono font-bold text-[#f5b212]">CONFIG</Text>
+                  </View>
+                </View>
+                <View>
+                  <Text className="text-2xl font-black text-white">
+                    {effectiveTargets.length}
+                  </Text>
+                  <Text className="text-xs font-bold text-gray-200 uppercase tracking-wide mt-0.5">
+                    Target Apps
+                  </Text>
+                  <Text className="text-[10px] text-gray-300 mt-1">
+                    {myTargets.length} local • {partnerTargets.length} remote
+                  </Text>
+                </View>
               </TouchableOpacity>
-            </View>
 
-            <View className="pt-2 border-t border-gray-800/60 flex-row justify-between items-center">
-              <Text className="text-[11px] text-gray-400">
-                Partner's Device Targets:
-              </Text>
-              <Text className="text-[11px] font-bold text-[#f5b212]">
-                {partnerTargets.length} Apps
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Center: Lockdown Control Area */}
-        <View className="items-center my-4">
-          {/* Warden Controls */}
-          {isWarden && (
-            <View className="w-full items-center">
-              <TouchableOpacity
-                onPress={handleToggleLockdown}
-                disabled={isTogglingLock}
-                activeOpacity={0.88}
-                className={`w-full py-7 px-6 rounded-2xl items-center justify-center border-2 ${
-                  isLocked
-                    ? 'bg-red-950/80 border-red-500'
-                    : 'bg-[#f5b212] border-[#f5b212]'
-                }`}
-                style={{
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 12 },
-                  shadowOpacity: 0.15,
-                  shadowRadius: 20,
-                  elevation: 12,
-                }}
-              >
-                {isTogglingLock ? (
-                  <ActivityIndicator color={isLocked ? '#ef4444' : '#003049'} size="large" />
-                ) : (
-                  <>
-                    <Text
-                      className={`font-black text-2xl tracking-widest uppercase text-center ${
-                        isLocked ? 'text-red-400' : 'text-[#003049]'
-                      }`}
-                    >
-                      {isLocked ? 'DISENGAGE LOCKDOWN' : 'INITIATE LOCKDOWN'}
-                    </Text>
-                    <Text
-                      className={`font-bold text-xs tracking-wider uppercase mt-1.5 ${
-                        isLocked ? 'text-red-300/80' : 'text-[#003049]/80'
-                      }`}
-                    >
-                      {isLocked
-                        ? 'Release partner targets & stand down sentinel'
-                        : `Enforce full lockout on targets`}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Prisoner View (When not Warden, or under lock in Mutual mode) */}
-          {!isWarden && (
-            <View className="w-full items-center">
+              {/* Card 2: Partner Connection */}
               <View
-                className={`w-full p-6 rounded-2xl border-2 items-center justify-center mb-4 ${
-                  isLocked
-                    ? 'bg-red-950/40 border-red-500/80'
-                    : 'bg-[#002236] border-gray-700'
-                }`}
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
+                style={elevatedCardStyle}
               >
-                <Text
-                  className={`font-black text-xl tracking-wider uppercase text-center ${
-                    isLocked ? 'text-red-400' : 'text-gray-300'
-                  }`}
-                >
-                  {isLocked ? 'LOCKDOWN ENGAGED BY WARDEN' : 'LOCKDOWN DISENGAGED'}
-                </Text>
-                <Text className="text-xs text-gray-400 text-center mt-2 leading-4">
-                  {isLocked
-                    ? 'Your target applications are under active native lockdown. Only your Warden can disengage.'
-                    : 'Your Warden has not engaged lockdown. Keep focused on your goals.'}
-                </Text>
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-2xl">🤝</Text>
+                  <View className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                </View>
+                <View>
+                  <Text className="text-base font-black text-white tracking-wide">
+                    LINKED & SYNCED
+                  </Text>
+                  <Text className="text-xs font-bold text-emerald-400 uppercase tracking-wide mt-0.5">
+                    Peer Connected
+                  </Text>
+                  <Text className="text-[10px] text-gray-300 mt-1">
+                    Role: {userRole === 'user_1' ? 'User 1' : 'User 2'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Row 2 */}
+            <View className="flex-row gap-3">
+              {/* Card 3: Sentinel Service Status */}
+              <View
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
+                style={elevatedCardStyle}
+              >
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-2xl">⚡</Text>
+                  <View
+                    className={`px-2 py-0.5 rounded border ${
+                      isSentinelServiceRunning || isLockdownActive
+                        ? 'bg-emerald-950/80 border-emerald-500'
+                        : 'bg-[#002236] border-gray-600'
+                    }`}
+                  >
+                    <Text
+                      className={`text-[9px] font-mono font-bold ${
+                        isSentinelServiceRunning || isLockdownActive
+                          ? 'text-emerald-400'
+                          : 'text-gray-400'
+                      }`}
+                    >
+                      {isSentinelServiceRunning || isLockdownActive ? 'ACTIVE' : 'IDLE'}
+                    </Text>
+                  </View>
+                </View>
+                <View>
+                  <Text className="text-base font-black text-white tracking-wide">
+                    {isSentinelServiceRunning || isLockdownActive ? 'ARMED' : 'STANDBY'}
+                  </Text>
+                  <Text className="text-xs font-bold text-gray-200 uppercase tracking-wide mt-0.5">
+                    Native Sentinel
+                  </Text>
+                  <Text className="text-[10px] text-gray-300 mt-1">
+                    {permissions.hasBatteryExemption ? 'Battery Exempted' : 'Check Exemption'}
+                  </Text>
+                </View>
               </View>
 
-              {/* Emergency Bypass Button for Prisoner */}
-              {isLocked && (
+              {/* Card 4: Action Button Routing to Chat */}
+              <TouchableOpacity
+                onPress={() => router.push('/chat')}
+                activeOpacity={0.85}
+                className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
+                style={elevatedCardStyle}
+              >
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-2xl">💬</Text>
+                  <View className="bg-[#f5b212]/20 border border-[#f5b212] px-2 py-0.5 rounded">
+                    <Text className="text-[9px] font-mono font-bold text-[#f5b212]">COMMS</Text>
+                  </View>
+                </View>
+                <View>
+                  <Text className="text-base font-black text-white tracking-wide">
+                    PARTNER CHAT
+                  </Text>
+                  <Text className="text-xs font-bold text-[#f5b212] uppercase tracking-wide mt-0.5">
+                    Open Channel →
+                  </Text>
+                  <Text className="text-[10px] text-gray-300 mt-1">
+                    Encrypted audit logging
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Quick Info & Security Explanatory Text */}
+          <View
+            className="border border-[#f5b212]/20 rounded-2xl p-4 mb-4"
+            style={{ backgroundColor: '#00283d' }}
+          >
+            <View className="flex-row items-center mb-1">
+              <Text className="text-sm mr-2">🛡️</Text>
+              <Text className="text-xs font-bold text-white uppercase tracking-wider">
+                Anti-Tampering Matrix Active
+              </Text>
+            </View>
+            <Text className="text-[11px] text-gray-300 leading-4">
+              Android Settings lockout, background task protection, and hardware back-gesture interception are engaged on all target applications.
+            </Text>
+          </View>
+        </ScrollView>
+
+        {/* MASTER ACTION: Fixed to Bottom Container */}
+        <View
+          className="absolute bottom-0 left-0 right-0 px-5 pt-3 pb-6 border-t border-[#f5b212]/30"
+          style={{ backgroundColor: '#002236' }}
+        >
+          {isWarden ? (
+            <TouchableOpacity
+              onPress={handleToggleLockdown}
+              disabled={isTogglingLock}
+              activeOpacity={0.88}
+              className={`w-full py-4 rounded-xl items-center justify-center border-2 ${
+                isLocked
+                  ? 'bg-red-950 border-red-500'
+                  : 'bg-[#f5b212] border-[#f5b212]'
+              }`}
+              style={masterButtonStyle}
+            >
+              {isTogglingLock ? (
+                <ActivityIndicator color={isLocked ? '#ef4444' : '#003049'} size="small" />
+              ) : (
+                <View className="items-center">
+                  <Text
+                    className={`font-black text-base uppercase tracking-widest ${
+                      isLocked ? 'text-red-400' : 'text-[#003049]'
+                    }`}
+                  >
+                    {isLocked ? 'DISENGAGE LOCKDOWN' : 'ENGAGE LOCKDOWN'}
+                  </Text>
+                  <Text
+                    className={`font-mono text-[10px] tracking-wider uppercase mt-0.5 ${
+                      isLocked ? 'text-red-300' : 'text-[#003049]/80'
+                    }`}
+                  >
+                    {isLocked
+                      ? 'Release partner targets & stand down sentinel'
+                      : 'Enforce full lockout on targets'}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <View className="w-full">
+              {isLocked ? (
                 <TouchableOpacity
                   onPress={() => setShowBypassModal(true)}
-                  activeOpacity={0.8}
-                  className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center border-2 border-amber-400 shadow-xl"
+                  activeOpacity={0.88}
+                  className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center border-2 border-amber-400"
+                  style={masterButtonStyle}
                 >
                   <Text className="text-[#003049] font-black text-sm uppercase tracking-widest">
-                    ⚠️ EMERGENCY BYPASS PROTOCOL
+                    ⚠️ REQUEST EMERGENCY BYPASS
+                  </Text>
+                  <Text className="text-[#003049]/80 font-mono text-[10px] tracking-wider uppercase mt-0.5">
+                    Requires Security PIN • Dispatches Partner Breach Notice
                   </Text>
                 </TouchableOpacity>
+              ) : (
+                <View className="w-full py-3.5 rounded-xl items-center justify-center bg-[#004060] border border-[#f5b212]/30">
+                  <Text className="text-white font-bold text-xs uppercase tracking-wider">
+                    Lockdown Stood Down By Warden
+                  </Text>
+                </View>
               )}
             </View>
           )}
 
-          {/* Emergency Bypass for Mutual Mode when locked */}
+          {/* Emergency Bypass secondary trigger for Mutual Mode when locked */}
           {pairingMode === 'Mutual' && isLocked && (
             <TouchableOpacity
               onPress={() => setShowBypassModal(true)}
               activeOpacity={0.8}
-              className="mt-3 px-6 py-2.5 rounded-xl border border-amber-500/60 bg-amber-950/30"
+              className="mt-2.5 py-2 rounded-lg items-center justify-center"
             >
-              <Text className="text-amber-400 font-bold text-xs uppercase tracking-wider">
-                Emergency PIN Bypass
+              <Text className="text-[#f5b212] font-mono text-xs font-bold uppercase tracking-wider">
+                Emergency PIN Override →
               </Text>
             </TouchableOpacity>
           )}
-
-          <Text className="text-[11px] text-gray-400 mt-4 text-center px-4 leading-4">
-            {isLocked
-              ? 'Lockdown active: Opening any restricted app or Settings triggers the un-dismissible native full-screen overlay.'
-              : 'Sentinel stands ready to monitor foreground apps via UsageStatsManager upon activation.'}
-          </Text>
         </View>
 
-        {/* Footer: Immediate Disconnect Partner Action */}
-        <View className="items-center pb-2">
-          <TouchableOpacity
-            onPress={handleDisconnect}
-            activeOpacity={0.75}
-            className="border border-red-500/40 bg-red-950/20 px-8 py-3 rounded-xl items-center justify-center"
-          >
-            <Text className="text-red-400 font-bold text-xs uppercase tracking-widest">
-              Disconnect Partner
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-
-      {/* Emergency Bypass Modal */}
-      <Modal
-        visible={showBypassModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowBypassModal(false)}
-      >
-        <View className="flex-1 bg-black/80 items-center justify-center px-6">
-          <View className="bg-[#002236] border-2 border-[#f5b212] rounded-3xl p-6 w-full max-w-sm shadow-2xl">
-            <View className="items-center mb-4">
-              <View className="w-12 h-12 rounded-full bg-red-950 border border-red-500 items-center justify-center mb-2">
-                <Text className="text-xl">🚨</Text>
-              </View>
-              <Text className="text-lg font-black text-[#f5b212] tracking-wider uppercase text-center">
-                Emergency Override
-              </Text>
-              <Text className="text-xs text-gray-300 text-center mt-1.5 leading-4">
-                This protocol will immediately disengage the native sentinel and log an urgent breach notice to your accountability partner.
-              </Text>
-            </View>
-
-            <View className="mb-5">
-              <Text className="text-[11px] text-gray-400 font-bold uppercase tracking-wider mb-1.5 text-center">
-                Enter 4-Digit Security PIN
-              </Text>
-              <TextInput
-                value={enteredPin}
-                onChangeText={setEnteredPin}
-                placeholder="••••"
-                placeholderTextColor="#64748b"
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={4}
-                className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3 rounded-xl text-2xl font-mono tracking-widest text-center font-bold"
-              />
-            </View>
-
-            <View className="gap-2.5">
-              <TouchableOpacity
-                onPress={handleEmergencyBypassSubmit}
-                disabled={enteredPin.length < 4 || isBypassing}
-                activeOpacity={0.88}
-                className={`py-3.5 rounded-xl items-center justify-center ${
-                  enteredPin.length >= 4 && !isBypassing
-                    ? 'bg-red-600'
-                    : 'bg-gray-800'
-                }`}
-                style={{
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 6 },
-                  shadowOpacity: 0.1,
-                  shadowRadius: 10,
-                  elevation: 6,
-                }}
-              >
-                {isBypassing ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text className="text-white font-black text-sm uppercase tracking-wider">
-                    Confirm Emergency Override
-                  </Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => {
-                  setShowBypassModal(false);
-                  setEnteredPin('');
-                }}
-                disabled={isBypassing}
-                activeOpacity={0.7}
-                className="py-3 rounded-xl items-center justify-center"
-              >
-                <Text className="text-gray-400 font-bold text-xs uppercase tracking-wider">
-                  Cancel
+        {/* Emergency Bypass PIN Modal */}
+        <Modal
+          visible={showBypassModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowBypassModal(false)}
+        >
+          <View className="flex-1 bg-black/80 items-center justify-center px-6">
+            <View
+              className="border-2 border-[#f5b212] rounded-3xl p-6 w-full max-w-sm"
+              style={elevatedCardStyle}
+            >
+              <View className="items-center mb-4">
+                <View className="w-12 h-12 rounded-full bg-red-950 border border-red-500 items-center justify-center mb-2">
+                  <Text className="text-xl">🚨</Text>
+                </View>
+                <Text className="text-lg font-black text-[#f5b212] tracking-wider uppercase text-center">
+                  Emergency Override
                 </Text>
-              </TouchableOpacity>
+                <Text className="text-xs text-gray-300 text-center mt-1.5 leading-4">
+                  This protocol will immediately disengage the native sentinel and log an urgent breach notice to your accountability partner.
+                </Text>
+              </View>
+
+              <View className="mb-5">
+                <Text className="text-[11px] text-gray-400 font-bold uppercase tracking-wider mb-1.5 text-center">
+                  Enter 4-Digit Security PIN
+                </Text>
+                <TextInput
+                  value={enteredPin}
+                  onChangeText={setEnteredPin}
+                  placeholder="••••"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                  secureTextEntry
+                  maxLength={4}
+                  className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3 rounded-xl text-2xl font-mono tracking-widest text-center font-bold"
+                />
+              </View>
+
+              <View className="gap-2.5">
+                <TouchableOpacity
+                  onPress={handleEmergencyBypassSubmit}
+                  disabled={enteredPin.length < 4 || isBypassing}
+                  activeOpacity={0.88}
+                  className={`py-3.5 rounded-xl items-center justify-center ${
+                    enteredPin.length >= 4 && !isBypassing
+                      ? 'bg-red-600'
+                      : 'bg-gray-800'
+                  }`}
+                  style={{
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 6 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 10,
+                    elevation: 6,
+                  }}
+                >
+                  {isBypassing ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text className="text-white font-black text-sm uppercase tracking-wider">
+                      Confirm Emergency Override
+                    </Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowBypassModal(false);
+                    setEnteredPin('');
+                  }}
+                  disabled={isBypassing}
+                  activeOpacity={0.7}
+                  className="py-3 rounded-xl items-center justify-center"
+                >
+                  <Text className="text-gray-400 font-bold text-xs uppercase tracking-wider">
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      </View>
     </SafeAreaView>
   );
 }
+
+export default Dashboard;

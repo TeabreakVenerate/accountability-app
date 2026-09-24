@@ -332,7 +332,16 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
           </View>
 
           {/* Step 1: Create Invite Card */}
-          <View className="bg-[#002236] border border-[#f5b212]/25 rounded-2xl p-5 mb-5 shadow-xl">
+          <View
+            className="bg-[#002236] border border-[#f5b212]/25 rounded-2xl p-5 mb-5"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.2,
+              shadowRadius: 10,
+              elevation: 6,
+            }}
+          >
             <View className="flex-row items-center mb-1">
               <View className="w-5 h-5 rounded-full bg-[#f5b212] items-center justify-center mr-2">
                 <Text className="text-[#003049] font-black text-xs">1</Text>
@@ -349,7 +358,14 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
               onPress={handleGenerateInvite}
               disabled={isGenerating}
               activeOpacity={0.88}
-              className="bg-[#f5b212] py-3.5 rounded-xl items-center justify-center shadow-md"
+              className="bg-[#f5b212] py-3.5 rounded-xl items-center justify-center"
+              style={{
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.15,
+                shadowRadius: 6,
+                elevation: 4,
+              }}
             >
               {isGenerating ? (
                 <ActivityIndicator color="#003049" />
@@ -379,7 +395,16 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
           </View>
 
           {/* Step 2: Join Partner Card */}
-          <View className="bg-[#002236] border border-gray-800 rounded-2xl p-5 shadow-xl mb-4">
+          <View
+            className="bg-[#002236] border border-gray-800 rounded-2xl p-5 mb-4"
+            style={{
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.2,
+              shadowRadius: 10,
+              elevation: 6,
+            }}
+          >
             <View className="flex-row items-center mb-1">
               <View className="w-5 h-5 rounded-full bg-gray-600 items-center justify-center mr-2">
                 <Text className="text-white font-black text-xs">2</Text>
