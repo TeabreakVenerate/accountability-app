@@ -165,16 +165,28 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
     }
   }, [pairingId, userRole]);
 
-  // Initial load and Realtime listener on partner catalog & targets
+  // Initial load of pairing data and local apps
   useEffect(() => {
     initPairingData();
     loadAndUploadLocalApps();
+  }, [initPairingData, loadAndUploadLocalApps]);
 
+  // Realtime listener on partner catalog & targets
+  useEffect(() => {
     if (!pairingId) return;
+
+    const channelTopic = `catalog-sync:${pairingId}`;
+    const existing = supabase.getChannels().find(
+      (c) => c.topic === channelTopic || c.topic === `realtime:${channelTopic}`
+    );
+    if (existing) {
+      console.log(`[AppSelector] Evicting lingering channel: ${channelTopic}`);
+      supabase.removeChannel(existing);
+    }
 
     // Realtime subscription for partner's updates
     const channel = supabase
-      .channel(`catalog-sync:${pairingId}`)
+      .channel(channelTopic)
       .on(
         'postgres_changes',
         {
@@ -187,7 +199,7 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
           const row = payload.new as any;
           if (!row) return;
 
-          const role = userRole || 'user_1';
+          const role = useAuthStore.getState().userRole || 'user_1';
           const partnerCatalogData =
             role === 'user_1' ? row.user_2_catalog : row.user_1_catalog;
 
@@ -217,12 +229,16 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn(`[AppSelector] Realtime channel error:`, err?.message || err);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [pairingId, initPairingData, loadAndUploadLocalApps, userRole, setPartnerCatalog, setMyTargets, setPartnerTargets]);
+  }, [pairingId, setPartnerCatalog, setMyTargets, setPartnerTargets]);
 
   // App list depending on active tab
   const displayedApps = useMemo(() => {

@@ -35,8 +35,6 @@ export function Dashboard() {
   const setIsLocked = useAuthStore((state) => state.setIsLocked);
   const bypassPin = useAuthStore((state) => state.bypassPin);
   const setBypassPin = useAuthStore((state) => state.setBypassPin);
-  const disconnectRequestedAt = useAuthStore((state) => state.disconnectRequestedAt);
-  const setDisconnectRequestedAt = useAuthStore((state) => state.setDisconnectRequestedAt);
   const resetPairing = useAuthStore((state) => state.resetPairing);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
 
@@ -53,9 +51,6 @@ export function Dashboard() {
     hasUsage: true,
     hasBatteryExemption: true,
   });
-
-  // 1-Hour Rage-Quit Cooldown Timer State
-  const [cooldownRemainingSeconds, setCooldownRemainingSeconds] = useState<number | null>(null);
 
   // Check OS Clearances (Overlay, Usage Stats, Battery Exemption)
   const checkClearances = useCallback(async () => {
@@ -93,32 +88,6 @@ export function Dashboard() {
       ? userRole === 'user_2'
       : true;
 
-  // 1-Hour Rage-Quit Cooldown Interval
-  useEffect(() => {
-    if (!disconnectRequestedAt) {
-      setCooldownRemainingSeconds(null);
-      return;
-    }
-
-    const computeRemaining = () => {
-      const elapsed = Math.floor(
-        (Date.now() - new Date(disconnectRequestedAt).getTime()) / 1000
-      );
-      const remaining = Math.max(0, 3600 - elapsed);
-      setCooldownRemainingSeconds(remaining);
-    };
-
-    computeRemaining();
-    const interval = setInterval(computeRemaining, 1000);
-    return () => clearInterval(interval);
-  }, [disconnectRequestedAt]);
-
-  const formatCooldown = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
   // Sync initial targets and state from Supabase
   const loadPairingTargets = useCallback(async () => {
     if (!pairingId) return;
@@ -146,12 +115,6 @@ export function Dashboard() {
 
       if (typeof pairing.is_locked === 'boolean') {
         setIsLocked(pairing.is_locked);
-      }
-
-      if (pairing.disconnect_requested_at) {
-        setDisconnectRequestedAt(pairing.disconnect_requested_at);
-      } else {
-        setDisconnectRequestedAt(null);
       }
 
       const localTargets = role === 'user_1' ? pairing.user_1_targets : pairing.user_2_targets;
@@ -183,13 +146,12 @@ export function Dashboard() {
     setPairingMode,
     setBypassPin,
     setIsLocked,
-    setDisconnectRequestedAt,
     setMyTargets,
     setPartnerTargets,
     setIsLockdownActive,
   ]);
 
-  // Sync with native sentinel status on mount & set up Realtime listener
+  // Sync with native sentinel status & initial targets on mount
   useEffect(() => {
     loadPairingTargets();
 
@@ -198,12 +160,25 @@ export function Dashboard() {
         setIsLockdownActive(true);
       }
     });
+  }, [loadPairingTargets, isLockdownActive, setIsLockdownActive]);
 
+  // Realtime subscription for remote pairing updates
+  useEffect(() => {
     if (!pairingId) return;
 
-    // Listen for updates on the pairing row in real-time
+    const channelName = `dashboard-targets:${pairingId}`;
+
+    // Clean up any lingering channel with the same topic to prevent collision errors
+    const existing = supabase
+      .getChannels()
+      .find((c) => c.topic === `realtime:${channelName}` || c.topic === channelName);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
+    // 1. Initialize channel and chain all .on() listeners first
     const channel = supabase
-      .channel(`dashboard-targets:${pairingId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -218,7 +193,8 @@ export function Dashboard() {
 
           console.log('[Dashboard Realtime] Received row update:', row);
 
-          const role = userRole || 'user_1';
+          const { userRole: currentRole, myTargets: currentMyTargets } = useAuthStore.getState();
+          const role = currentRole || 'user_1';
           const updatedMyTargets = role === 'user_1' ? row.user_1_targets : row.user_2_targets;
           const updatedPartnerTargets = role === 'user_1' ? row.user_2_targets : row.user_1_targets;
 
@@ -228,10 +204,6 @@ export function Dashboard() {
 
           if (row.bypass_pin) {
             setBypassPin(row.bypass_pin);
-          }
-
-          if (row.disconnect_requested_at !== undefined) {
-            setDisconnectRequestedAt(row.disconnect_requested_at || null);
           }
 
           if (Array.isArray(updatedMyTargets)) {
@@ -253,7 +225,7 @@ export function Dashboard() {
                 : true;
 
             if (row.is_locked && isControlledByPartner) {
-              const targets = Array.isArray(updatedMyTargets) ? updatedMyTargets : myTargets;
+              const targets = Array.isArray(updatedMyTargets) ? updatedMyTargets : currentMyTargets;
               if (targets.length > 0) {
                 console.log('[Dashboard Realtime] Engaging Sentinel with offline persistence...');
                 await NativeSentinel.startSentinel(targets, true, -1);
@@ -266,25 +238,28 @@ export function Dashboard() {
             }
           }
         }
-      )
-      .subscribe();
+      );
 
+    // 2. Call .subscribe() at the very end
+    channel.subscribe((status, err) => {
+      if (status === 'CHANNEL_ERROR') {
+        console.warn(`[Dashboard Realtime] Channel error for ${channelName}:`, err?.message || err);
+      }
+    });
+
+    // 3. Guaranteed cleanup on unmount
     return () => {
+      console.log(`[Dashboard Realtime] Teardown: removing channel ${channelName}`);
       supabase.removeChannel(channel);
     };
   }, [
     pairingId,
-    loadPairingTargets,
-    isLockdownActive,
-    setIsLockdownActive,
-    userRole,
-    setMyTargets,
-    setPartnerTargets,
     setPairingMode,
     setBypassPin,
     setIsLocked,
-    setDisconnectRequestedAt,
-    myTargets,
+    setMyTargets,
+    setPartnerTargets,
+    setIsLockdownActive,
   ]);
 
   // Warden Action: Toggle Lockdown state
@@ -392,109 +367,37 @@ export function Dashboard() {
     }
   };
 
-  // 1-Hour Rage-Quit Cooldown Trigger
-  const handleDisconnectPress = () => {
-    if (disconnectRequestedAt && cooldownRemainingSeconds !== null && cooldownRemainingSeconds > 0) {
-      Alert.alert(
-        'Cooldown Active',
-        `Unpairing protocol is in cooldown (${formatCooldown(cooldownRemainingSeconds)} remaining). Target boundaries remain strictly enforced.`
-      );
-      return;
-    }
-
-    if (disconnectRequestedAt && cooldownRemainingSeconds === 0) {
-      handleFinalizeDisconnect();
-      return;
-    }
-
+  // Immediate Disconnect Partner Flow
+  const handleDisconnect = () => {
     Alert.alert(
-      'Initiate Disconnect Protocol?',
-      'To prevent impulsive rage-quitting, unpairing requires a mandatory 1-hour anti-tamper cooldown buffer. Lockdown boundaries remain strictly active during this period.',
+      'Disconnect Partner',
+      'Are you sure you want to unpair? This will stand down all active monitors and reset your session immediately.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Initiate 1-Hour Cooldown',
+          text: 'Disconnect',
           style: 'destructive',
-          onPress: handleInitiateDisconnectCooldown,
+          onPress: async () => {
+            try {
+              await NativeSentinel.stopSentinel();
+              setIsLockdownActive(false);
+
+              if (pairingId) {
+                await supabase
+                  .from('pairings')
+                  .update({ status: 'disconnected', is_locked: false })
+                  .eq('id', pairingId);
+              }
+
+              resetPairing();
+              router.replace('/pairing');
+            } catch (err: any) {
+              Alert.alert('Error', err?.message || 'Failed to disconnect partner.');
+            }
+          },
         },
       ]
     );
-  };
-
-  const handleInitiateDisconnectCooldown = async () => {
-    const now = new Date().toISOString();
-    setDisconnectRequestedAt(now);
-
-    if (pairingId) {
-      try {
-        await supabase
-          .from('pairings')
-          .update({ disconnect_requested_at: now })
-          .eq('id', pairingId);
-
-        await supabase.from('messages').insert([
-          {
-            pairing_id: pairingId,
-            sender_id: userRole || 'user_1',
-            message:
-              '⚠️ [DISCONNECT INITIATED] Partner requested unpairing. A mandatory 1-hour anti-tamper cooldown has begun. Boundaries remain strictly enforced.',
-          },
-        ]);
-      } catch (err) {
-        console.warn('[Dashboard] Error updating disconnect_requested_at:', err);
-      }
-    }
-
-    Alert.alert(
-      'RAGE-QUIT COOLDOWN ENGAGED',
-      'A 1-hour buffer is now active. Unpairing will only complete after 60 minutes if not aborted.'
-    );
-  };
-
-  const handleCancelDisconnectCooldown = async () => {
-    setDisconnectRequestedAt(null);
-
-    if (pairingId) {
-      try {
-        await supabase
-          .from('pairings')
-          .update({ disconnect_requested_at: null })
-          .eq('id', pairingId);
-
-        await supabase.from('messages').insert([
-          {
-            pairing_id: pairingId,
-            sender_id: userRole || 'user_1',
-            message:
-              '✅ [DISCONNECT CANCELLED] Partner aborted the unpairing request. Session fully restored.',
-          },
-        ]);
-      } catch (err) {
-        console.warn('[Dashboard] Error cancelling disconnect cooldown:', err);
-      }
-    }
-
-    Alert.alert('DISCONNECT ABORTED', 'The 1-hour unpairing countdown was cancelled. Session restored.');
-  };
-
-  const handleFinalizeDisconnect = async () => {
-    try {
-      await NativeSentinel.stopSentinel();
-      setIsLockdownActive(false);
-
-      if (pairingId) {
-        await supabase
-          .from('pairings')
-          .update({ status: 'disconnected', is_locked: false, disconnect_requested_at: null })
-          .eq('id', pairingId);
-      }
-
-      resetPairing();
-      router.replace('/pairing');
-      Alert.alert('PAIRING TERMINATED', 'The accountability session has been stood down.');
-    } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to finalize disconnect.');
-    }
   };
 
   const hasMissingPermissions =
@@ -560,7 +463,7 @@ export function Dashboard() {
               <View className="flex-1">
                 <Text className="text-sm font-bold text-white">Anti-Tampering Matrix</Text>
                 <Text className="text-xs text-gray-400">
-                  Settings lockout, 1-hour rage quit buffer & battery exemption bypass.
+                  Settings lockout, native OS enforcement & battery exemption bypass.
                 </Text>
               </View>
             </View>
@@ -665,57 +568,6 @@ export function Dashboard() {
             </View>
           )}
 
-          {/* Module 4: 1-Hour Rage-Quit Cooldown Banner */}
-          {disconnectRequestedAt && cooldownRemainingSeconds !== null && (
-            <View className="mb-4 p-4 bg-red-950/50 border-2 border-red-500 rounded-2xl">
-              <View className="flex-row items-center justify-between mb-1.5">
-                <View className="flex-row items-center">
-                  <View className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse mr-2" />
-                  <Text className="text-xs font-black text-red-400 uppercase tracking-wider">
-                    Rage-Quit Cooldown Engaged
-                  </Text>
-                </View>
-                <View className="bg-red-900/60 px-2 py-0.5 rounded border border-red-500/50">
-                  <Text className="text-[10px] font-mono text-red-300 font-bold">ANTI-TAMPER</Text>
-                </View>
-              </View>
-
-              <Text className="text-xl font-black text-white font-mono tracking-widest my-1">
-                {cooldownRemainingSeconds > 0
-                  ? `Unpairing in ${formatCooldown(cooldownRemainingSeconds)}...`
-                  : '1-Hour Buffer Complete'}
-              </Text>
-
-              <Text className="text-[11px] text-gray-300 mb-3 leading-4">
-                {cooldownRemainingSeconds > 0
-                  ? 'A mandatory 1-hour anti-tamper security buffer is active. Target restrictions remain strictly enforced.'
-                  : 'Cooldown period has elapsed. You may now permanently destroy this accountability link.'}
-              </Text>
-
-              {cooldownRemainingSeconds > 0 ? (
-                <TouchableOpacity
-                  onPress={handleCancelDisconnectCooldown}
-                  activeOpacity={0.8}
-                  className="bg-red-600/30 border border-red-500 py-2.5 rounded-xl items-center justify-center"
-                >
-                  <Text className="text-white font-bold text-xs uppercase tracking-wider">
-                    Cancel Unpairing Request
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  onPress={handleFinalizeDisconnect}
-                  activeOpacity={0.8}
-                  className="bg-red-600 py-3 rounded-xl items-center justify-center shadow-lg"
-                >
-                  <Text className="text-white font-black text-xs uppercase tracking-wider">
-                    Finalize Unpairing & Delete Session
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-
           {/* Quick Nav Controls: Chat & Target Apps */}
           <View className="flex-row gap-2.5 mb-4">
             <TouchableOpacity
@@ -793,11 +645,18 @@ export function Dashboard() {
                 onPress={handleToggleLockdown}
                 disabled={isTogglingLock}
                 activeOpacity={0.88}
-                className={`w-full py-7 px-6 rounded-2xl items-center justify-center shadow-2xl border-2 ${
+                className={`w-full py-7 px-6 rounded-2xl items-center justify-center border-2 ${
                   isLocked
                     ? 'bg-red-950/80 border-red-500'
                     : 'bg-[#f5b212] border-[#f5b212]'
                 }`}
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 12 },
+                  shadowOpacity: 0.15,
+                  shadowRadius: 20,
+                  elevation: 12,
+                }}
               >
                 {isTogglingLock ? (
                   <ActivityIndicator color={isLocked ? '#ef4444' : '#003049'} size="large" />
@@ -884,27 +743,15 @@ export function Dashboard() {
           </Text>
         </View>
 
-        {/* Footer: Disconnect Partner Action */}
+        {/* Footer: Immediate Disconnect Partner Action */}
         <View className="items-center pb-2">
           <TouchableOpacity
-            onPress={handleDisconnectPress}
+            onPress={handleDisconnect}
             activeOpacity={0.75}
-            className={`border px-8 py-3 rounded-xl items-center justify-center ${
-              disconnectRequestedAt
-                ? 'border-amber-500/60 bg-amber-950/30'
-                : 'border-red-500/40 bg-red-950/20'
-            }`}
+            className="border border-red-500/40 bg-red-950/20 px-8 py-3 rounded-xl items-center justify-center"
           >
-            <Text
-              className={`font-bold text-xs uppercase tracking-widest ${
-                disconnectRequestedAt ? 'text-amber-400' : 'text-red-400'
-              }`}
-            >
-              {disconnectRequestedAt && cooldownRemainingSeconds !== null
-                ? cooldownRemainingSeconds > 0
-                  ? `Cooldown Active (${formatCooldown(cooldownRemainingSeconds)})`
-                  : 'Complete Disconnect'
-                : 'Disconnect Partner'}
+            <Text className="text-red-400 font-bold text-xs uppercase tracking-widest">
+              Disconnect Partner
             </Text>
           </TouchableOpacity>
         </View>
@@ -952,11 +799,18 @@ export function Dashboard() {
                 onPress={handleEmergencyBypassSubmit}
                 disabled={enteredPin.length < 4 || isBypassing}
                 activeOpacity={0.88}
-                className={`py-3.5 rounded-xl items-center justify-center shadow-lg ${
+                className={`py-3.5 rounded-xl items-center justify-center ${
                   enteredPin.length >= 4 && !isBypassing
                     ? 'bg-red-600'
                     : 'bg-gray-800'
                 }`}
+                style={{
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 6 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 10,
+                  elevation: 6,
+                }}
               >
                 {isBypassing ? (
                   <ActivityIndicator color="#ffffff" />

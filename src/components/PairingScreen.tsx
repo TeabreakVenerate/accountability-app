@@ -76,8 +76,17 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
 
     console.log(`[Realtime] Initializing channel for pairing id: ${activePairingRowId}`);
 
+    const channelTopic = `pairing:${activePairingRowId}`;
+    const existing = supabase.getChannels().find(
+      (c) => c.topic === channelTopic || c.topic === `realtime:${channelTopic}`
+    );
+    if (existing) {
+      console.log(`[Realtime] Evicting lingering channel: ${channelTopic}`);
+      supabase.removeChannel(existing);
+    }
+
     const channel = supabase
-      .channel(`pairing:${activePairingRowId}`)
+      .channel(channelTopic)
       .on(
         'postgres_changes',
         {
@@ -96,7 +105,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
               setPairingMode(row.pairing_mode as PairingMode);
             }
             setPairingId(activePairingRowId);
-            router.replace('/dashboard');
+            router.push('/dashboard');
           }
         }
       )
@@ -215,7 +224,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
       setPairingCode(trimmed);
       setPairingMode(serverMode);
       setPairingId(data.id);
-      router.replace('/dashboard');
+      router.push('/dashboard');
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');
     } finally {
@@ -237,7 +246,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
           {/* Header & Back Navigation */}
           <View className="flex-row items-center justify-between mb-4">
             <TouchableOpacity
-              onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+              onPress={() => (onBack ? onBack() : router.push('/dashboard'))}
               activeOpacity={0.7}
               className="bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg flex-row items-center"
             >
@@ -271,13 +280,23 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
                 return (
                   <TouchableOpacity
                     key={item.mode}
-                    onPress={() => setSelectedMode(item.mode)}
+                    onPress={() => {
+                      setSelectedMode(item.mode);
+                      setPairingMode(item.mode);
+                    }}
                     activeOpacity={0.8}
                     className={`p-4 rounded-2xl border ${
                       isSelected
-                        ? 'bg-[#002236] border-[#f5b212] shadow-lg'
+                        ? 'bg-[#002236] border-[#f5b212]'
                         : 'bg-[#001724]/80 border-gray-800'
                     }`}
+                    style={isSelected ? {
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 10 },
+                      shadowOpacity: 0.1,
+                      shadowRadius: 15,
+                      elevation: 8,
+                    } : undefined}
                   >
                     <View className="flex-row items-center justify-between mb-1">
                       <Text

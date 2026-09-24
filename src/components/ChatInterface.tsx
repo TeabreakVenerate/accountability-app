@@ -60,15 +60,30 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
     }
   }, [pairingId]);
 
-  // Realtime subscription for incoming messages
+  // 1. Fetch historical messages on mount or pairingId change
   useEffect(() => {
     fetchMessages();
+  }, [fetchMessages]);
 
+  // 2. Dedicated Realtime subscription for incoming messages
+  useEffect(() => {
     if (!pairingId) return;
 
-    console.log(`[Chat] Subscribing to messages for pairing: ${pairingId}`);
+    const channelName = `chat:${pairingId}`;
+
+    // Clean up any lingering channel with the same topic to prevent duplicate callback errors
+    const existing = supabase
+      .getChannels()
+      .find((c) => c.topic === `realtime:${channelName}` || c.topic === channelName);
+    if (existing) {
+      supabase.removeChannel(existing);
+    }
+
+    console.log(`[Chat] Initializing Realtime channel: ${channelName}`);
+
+    // Chain all .on() listeners first
     const channel = supabase
-      .channel(`chat:${pairingId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -88,17 +103,21 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
             });
           }
         }
-      )
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('[Chat] Realtime channel error:', err?.message || err);
-        }
-      });
+      );
 
+    // Call .subscribe() at the very end
+    channel.subscribe((status, err) => {
+      if (status === 'CHANNEL_ERROR') {
+        console.warn(`[Chat] Realtime channel error for ${channelName}:`, err?.message || err);
+      }
+    });
+
+    // Clean up channel on unmount
     return () => {
+      console.log(`[Chat] Teardown: cleanly removing channel ${channelName}`);
       supabase.removeChannel(channel);
     };
-  }, [pairingId, fetchMessages]);
+  }, [pairingId]);
 
   // Auto-scroll on new message
   useEffect(() => {
@@ -162,7 +181,7 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
   return (
     <SafeAreaView className="flex-1 bg-[#003049]">
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1"
       >
         {/* Chat Header */}
@@ -232,11 +251,18 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
                   }`}
                 >
                   <View
-                    className={`rounded-2xl px-4 py-2.5 shadow-md ${
+                    className={`rounded-2xl px-4 py-2.5 ${
                       isMe
                         ? 'bg-[#002236] border border-[#f5b212]'
                         : 'bg-[#001724] border border-gray-800'
                     }`}
+                    style={{
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 4 },
+                      shadowOpacity: 0.08,
+                      shadowRadius: 8,
+                      elevation: 4,
+                    }}
                   >
                     <Text className="text-sm text-white leading-5">
                       {item.message}
