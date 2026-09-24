@@ -12,13 +12,11 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
+import { router } from 'expo-router';
 import { useAuthStore, PairingMode } from '../store/useAuthStore';
 import { supabase } from '../lib/supabase';
 import { NativeSentinel } from '../lib/NativeSentinel';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
-import { PairingScreen } from './PairingScreen';
-import { AppSelector } from './AppSelector';
-import { ChatInterface } from './ChatInterface';
 
 export function Dashboard() {
   const pairingId = useAuthStore((state) => state.pairingId);
@@ -42,8 +40,6 @@ export function Dashboard() {
   const resetPairing = useAuthStore((state) => state.resetPairing);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
 
-  // Active view navigation: 'dashboard' | 'pairing' | 'apps' | 'chat'
-  const [activeScreen, setActiveScreen] = useState<'dashboard' | 'pairing' | 'apps' | 'chat'>('dashboard');
   const [isTogglingLock, setIsTogglingLock] = useState(false);
 
   // Emergency Bypass Modal State
@@ -165,7 +161,6 @@ export function Dashboard() {
       if (Array.isArray(remoteTargets)) setPartnerTargets(remoteTargets);
 
       // Boot Resilience & Offline Fallback:
-      // If server or store indicates is_locked and local device is subject to lock
       const shouldLockLocal =
         pairing.is_locked &&
         (role === 'user_1' ? pairing.pairing_mode !== 'Warden' : pairing.pairing_mode !== 'Prisoner');
@@ -307,7 +302,7 @@ export function Dashboard() {
       Alert.alert(
         'No Target Apps Configured',
         'Configure restricted target apps before engaging lockdown enforcement.',
-        [{ text: 'Manage Apps', onPress: () => setActiveScreen('apps') }]
+        [{ text: 'Manage Apps', onPress: () => router.push('/apps') }]
       );
       return;
     }
@@ -316,7 +311,6 @@ export function Dashboard() {
     try {
       const nextLockedState = !isLocked;
 
-      // Update Supabase pairings is_locked
       if (pairingId) {
         const { error } = await supabase
           .from('pairings')
@@ -331,7 +325,6 @@ export function Dashboard() {
 
       setIsLocked(nextLockedState);
 
-      // In Mutual mode, also trigger local sentinel with offline persistence
       if (pairingMode === 'Mutual' || !pairingMode) {
         if (nextLockedState && myTargets.length > 0) {
           await NativeSentinel.startSentinel(myTargets, true, -1);
@@ -367,19 +360,16 @@ export function Dashboard() {
 
     setIsBypassing(true);
     try {
-      // 1. Stand down local Sentinel & SharedPreferences
       await NativeSentinel.stopSentinel();
       setIsLockdownActive(false);
       setIsLocked(false);
 
-      // 2. Disengage lockdown in Supabase
       if (pairingId) {
         await supabase
           .from('pairings')
           .update({ is_locked: false })
           .eq('id', pairingId);
 
-        // 3. Log emergency audit alert to partner in messages table
         await supabase.from('messages').insert([
           {
             pairing_id: pairingId,
@@ -402,7 +392,7 @@ export function Dashboard() {
     }
   };
 
-  // Module 4: 1-Hour Rage-Quit Cooldown Trigger
+  // 1-Hour Rage-Quit Cooldown Trigger
   const handleDisconnectPress = () => {
     if (disconnectRequestedAt && cooldownRemainingSeconds !== null && cooldownRemainingSeconds > 0) {
       Alert.alert(
@@ -500,7 +490,7 @@ export function Dashboard() {
       }
 
       resetPairing();
-      setActiveScreen('dashboard');
+      router.replace('/pairing');
       Alert.alert('PAIRING TERMINATED', 'The accountability session has been stood down.');
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to finalize disconnect.');
@@ -509,19 +499,6 @@ export function Dashboard() {
 
   const hasMissingPermissions =
     !permissions.hasOverlay || !permissions.hasUsage || !permissions.hasBatteryExemption;
-
-  // Screen Switcher Sub-Routes
-  if (activeScreen === 'pairing') {
-    return <PairingScreen onBack={() => setActiveScreen('dashboard')} />;
-  }
-
-  if (activeScreen === 'apps') {
-    return <AppSelector onBack={() => setActiveScreen('dashboard')} />;
-  }
-
-  if (activeScreen === 'chat') {
-    return <ChatInterface onBack={() => setActiveScreen('dashboard')} />;
-  }
 
   // 1. Unpaired State: High-Conviction Onboarding View
   if (!pairingId) {
@@ -591,7 +568,7 @@ export function Dashboard() {
 
           {/* Primary Action Button */}
           <TouchableOpacity
-            onPress={() => setActiveScreen('pairing')}
+            onPress={() => router.push('/pairing')}
             activeOpacity={0.88}
             className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center shadow-2xl mb-4"
           >
@@ -742,7 +719,7 @@ export function Dashboard() {
           {/* Quick Nav Controls: Chat & Target Apps */}
           <View className="flex-row gap-2.5 mb-4">
             <TouchableOpacity
-              onPress={() => setActiveScreen('chat')}
+              onPress={() => router.push('/chat')}
               activeOpacity={0.8}
               className="flex-1 bg-[#002236] border border-[#f5b212]/30 p-3 rounded-xl flex-row items-center justify-center"
             >
@@ -753,7 +730,7 @@ export function Dashboard() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setActiveScreen('apps')}
+              onPress={() => router.push('/apps')}
               activeOpacity={0.8}
               className="flex-1 bg-[#002236] border border-[#f5b212]/30 p-3 rounded-xl flex-row items-center justify-center"
             >
@@ -788,7 +765,7 @@ export function Dashboard() {
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => setActiveScreen('apps')}
+                onPress={() => router.push('/apps')}
                 activeOpacity={0.7}
                 className="bg-[#f5b212]/15 border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
               >

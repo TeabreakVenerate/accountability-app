@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 
@@ -167,15 +168,13 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
         {/* Chat Header */}
         <View className="px-5 py-4 border-b border-gray-800/80 bg-[#002236]/90 flex-row items-center justify-between">
           <View className="flex-row items-center flex-1">
-            {onBack && (
-              <TouchableOpacity
-                onPress={onBack}
-                activeOpacity={0.7}
-                className="mr-3 bg-[#001724] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
-              >
-                <Text className="text-xs font-bold text-[#f5b212]">← Back</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+              activeOpacity={0.7}
+              className="mr-3 bg-[#001724] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
+            >
+              <Text className="text-xs font-bold text-[#f5b212]">← Back</Text>
+            </TouchableOpacity>
             <View>
               <Text className="text-base font-black text-white tracking-wide uppercase">
                 Partner Comms

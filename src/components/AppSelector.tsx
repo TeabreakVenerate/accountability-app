@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuthStore, CatalogApp } from '../store/useAuthStore';
+import { router } from 'expo-router';
 import { fetchInstalledApps, InstalledApp } from '../lib/NativeInstalledApps';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
@@ -328,15 +329,13 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
         <View className="mb-3">
           <View className="flex-row items-center justify-between mb-2">
             <View className="flex-row items-center">
-              {onBack && (
-                <TouchableOpacity
-                  onPress={onBack}
-                  activeOpacity={0.7}
-                  className="bg-[#002236] border border-[#f5b212]/40 px-2.5 py-1 rounded-lg mr-2"
-                >
-                  <Text className="text-xs font-bold text-[#f5b212]">← Back</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+                activeOpacity={0.7}
+                className="bg-[#002236] border border-[#f5b212]/40 px-2.5 py-1 rounded-lg mr-2"
+              >
+                <Text className="text-xs font-bold text-[#f5b212]">← Back</Text>
+              </TouchableOpacity>
               <View className="bg-[#002236] border border-[#f5b212]/30 px-3 py-1 rounded-full">
                 <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-wider">
                   Boundary Setup

@@ -1,12 +1,7 @@
 import 'expo-dev-client';
 import '../global.css';
-import { Slot } from 'expo-router';
-import { AuthGuard } from '../components/AuthGuard';
+import { Stack } from 'expo-router';
 
 export default function RootLayout() {
-  return (
-    <AuthGuard>
-      <Slot />
-    </AuthGuard>
-  );
+  return <Stack screenOptions={{ headerShown: false }} />;
 }

@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useAuthStore, PairingMode } from '../store/useAuthStore';
 
@@ -90,11 +91,12 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
           const row = payload.new as any;
 
           if (row && row.status === 'active') {
-            console.log("[Realtime] Status transitioned to 'active'! Advancing to Command Center...");
+            console.log("[Realtime] Status transitioned to 'active'! Navigating to /dashboard...");
             if (row.pairing_mode) {
               setPairingMode(row.pairing_mode as PairingMode);
             }
             setPairingId(activePairingRowId);
+            router.replace('/dashboard');
           }
         }
       )
@@ -213,6 +215,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
       setPairingCode(trimmed);
       setPairingMode(serverMode);
       setPairingId(data.id);
+      router.replace('/dashboard');
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');
     } finally {
@@ -233,17 +236,13 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
         >
           {/* Header & Back Navigation */}
           <View className="flex-row items-center justify-between mb-4">
-            {onBack ? (
-              <TouchableOpacity
-                onPress={onBack}
-                activeOpacity={0.7}
-                className="bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg flex-row items-center"
-              >
-                <Text className="text-xs font-bold text-[#f5b212]">← Command Center</Text>
-              </TouchableOpacity>
-            ) : (
-              <View />
-            )}
+            <TouchableOpacity
+              onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+              activeOpacity={0.7}
+              className="bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg flex-row items-center"
+            >
+              <Text className="text-xs font-bold text-[#f5b212]">← Command Center</Text>
+            </TouchableOpacity>
             <View className="bg-[#002236] border border-[#f5b212]/30 px-3 py-1 rounded-full">
               <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-widest">
                 Accountability Link
