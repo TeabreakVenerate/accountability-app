@@ -9,6 +9,7 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
@@ -51,15 +52,14 @@ export function PairingScreen() {
         (payload) => {
           console.log('REALTIME PAYLOAD RECEIVED:', payload);
 
-          // If status changed to 'active', update Zustand store to trigger Dashboard mount
+          // If status changed to 'active', update Zustand store to advance router
           if (payload.new && (payload.new as any).status === 'active') {
-            console.log("[Realtime] Status transitioned to 'active'! Mounting Dashboard...");
+            console.log("[Realtime] Status transitioned to 'active'! Transitioning to App Selection...");
             setPairingId(activePairingRowId);
           }
         }
       )
       .subscribe((status, err) => {
-        // Graceful Degradation: discrete state handling without fatal exceptions
         switch (status) {
           case 'SUBSCRIBED':
             console.log(`[Realtime] Status: SUBSCRIBED to pairing:${activePairingRowId}`);
@@ -68,7 +68,7 @@ export function PairingScreen() {
             console.warn(`[Realtime] Status: CHANNEL_ERROR for pairing:${activePairingRowId}:`, err?.message || err);
             break;
           case 'TIMED_OUT':
-            console.warn(`[Realtime] Status: TIMED_OUT for pairing:${activePairingRowId}. Waiting for reconnect...`);
+            console.warn(`[Realtime] Status: TIMED_OUT for pairing:${activePairingRowId}`);
             break;
           case 'CLOSED':
             console.log(`[Realtime] Status: CLOSED for pairing:${activePairingRowId}`);
@@ -78,21 +78,21 @@ export function PairingScreen() {
         }
       });
 
-    // The Teardown: Cleanly remove WebSocket channel on unmount or dependency change
+    // Teardown
     return () => {
       console.log(`[Realtime] Teardown: cleanly removing channel pairing:${activePairingRowId}`);
       supabase.removeChannel(channel);
     };
   }, [activePairingRowId, setPairingId]);
 
-  // Wire "Generate Invite"
+  // Step 1: Wire "Generate Invite"
   const handleGenerateInvite = async () => {
     setIsGenerating(true);
     try {
       const code = generatePairingCode();
       const { data: userData } = await supabase.auth.getUser();
 
-      // 1. Insert new row with status 'pending'
+      // Insert new row with status 'pending'
       const { data, error } = await supabase
         .from('pairings')
         .insert([
@@ -110,7 +110,6 @@ export function PairingScreen() {
         return;
       }
 
-      // 2. Update local UI state & trigger useEffect lifecycle
       setGeneratedCode(code);
       setActivePairingRowId(data.id);
     } catch (err: any) {
@@ -120,17 +119,16 @@ export function PairingScreen() {
     }
   };
 
-  // Wire "Connect Partner"
+  // Step 2: Wire "Connect Partner"
   const handleJoinPartner = async () => {
     const trimmed = partnerCode.trim().toUpperCase();
     if (!trimmed || trimmed.length < 6) {
-      Alert.alert('Validation Error', 'Please enter a valid 6-character partner invite code.');
+      Alert.alert('Invalid Code', 'Please enter a valid 6-character partner invite code.');
       return;
     }
 
     setIsJoining(true);
     try {
-      // 1. Query Supabase for the entered pairing_code
       const { data, error } = await supabase
         .from('pairings')
         .select('*')
@@ -143,17 +141,15 @@ export function PairingScreen() {
       }
 
       if (!data) {
-        Alert.alert('Code Not Found', 'The entered pairing code does not exist. Please check and try again.');
+        Alert.alert('Code Not Found', 'The entered code does not exist. Please check and try again.');
         return;
       }
 
-      // 2. Check if status is pending
       if (data.status !== 'pending') {
-        Alert.alert('Unavailable', 'This pairing invite has already been used or expired.');
+        Alert.alert('Unavailable', 'This pairing invite has already been claimed or expired.');
         return;
       }
 
-      // 3. Update status to active and assign user_2_id
       const { data: userData } = await supabase.auth.getUser();
       const { error: updateError } = await supabase
         .from('pairings')
@@ -168,7 +164,7 @@ export function PairingScreen() {
         return;
       }
 
-      // 4. Update Zustand useAuthStore with pairingId to trigger navigation
+      // Update Zustand store to advance router
       setPairingId(data.id);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');
@@ -181,100 +177,123 @@ export function PairingScreen() {
     <SafeAreaView className="flex-1 bg-[#003049]">
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1 justify-center px-6"
+        className="flex-1"
       >
-        {/* Header Branding */}
-        <View className="items-center mb-10">
-          <Text className="text-3xl font-extrabold tracking-widest text-[#f5b212] uppercase">
-            Accountability
-          </Text>
-          <Text className="text-sm text-gray-300 mt-2 font-medium tracking-wide">
-            Mutual Monitoring & Remote Lockdown
-          </Text>
-        </View>
-
-        {/* Action Card */}
-        <View className="bg-[#002236] border border-[#f5b212]/20 rounded-2xl p-6 shadow-lg">
-          {/* Section 1: Generate Invite */}
-          <View className="mb-6">
-            <Text className="text-white font-semibold text-base mb-2">
-              Start a New Pairing
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+          className="px-6 py-8"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header Branding */}
+          <View className="items-center mb-8">
+            <View className="bg-[#002236] border border-[#f5b212]/30 px-3.5 py-1 rounded-full mb-3">
+              <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-widest">
+                Accountability Protocol
+              </Text>
+            </View>
+            <Text className="text-3xl font-black tracking-widest text-[#f5b212] uppercase text-center">
+              Device Pairing
             </Text>
+            <Text className="text-xs text-gray-300 mt-2 text-center max-w-[280px] leading-4">
+              Mutual peer-to-peer accountability. Choose one method below to establish the encrypted link.
+            </Text>
+          </View>
+
+          {/* Step 1: Create Invite Card */}
+          <View className="bg-[#002236] border border-[#f5b212]/25 rounded-2xl p-5 mb-5 shadow-xl">
+            <View className="flex-row items-center mb-1">
+              <View className="w-5 h-5 rounded-full bg-[#f5b212] items-center justify-center mr-2">
+                <Text className="text-[#003049] font-black text-xs">1</Text>
+              </View>
+              <Text className="text-white font-bold text-sm tracking-wide">
+                Step 1: Generate your secure Link
+              </Text>
+            </View>
+            <Text className="text-[11px] text-gray-400 mb-4 pl-7">
+              Create a cryptographic code for your accountability partner to enter.
+            </Text>
+
             <TouchableOpacity
               onPress={handleGenerateInvite}
               disabled={isGenerating}
-              activeOpacity={0.85}
-              className="bg-[#f5b212] py-4 rounded-xl items-center justify-center shadow-md"
+              activeOpacity={0.88}
+              className="bg-[#f5b212] py-3.5 rounded-xl items-center justify-center shadow-md"
             >
               {isGenerating ? (
                 <ActivityIndicator color="#003049" />
               ) : (
-                <Text className="text-[#003049] font-bold text-lg tracking-wide uppercase">
-                  Generate Invite
+                <Text className="text-[#003049] font-black text-sm uppercase tracking-wider">
+                  Generate Accountability Link
                 </Text>
               )}
             </TouchableOpacity>
 
             {generatedCode && (
-              <View className="mt-4 p-4 bg-[#001724] rounded-xl border border-[#f5b212]/40 items-center">
-                <Text className="text-xs text-gray-400 mb-1">Your 6-Character Pairing Code:</Text>
-                <Text className="text-2xl font-bold text-[#f5b212] tracking-widest selectable">
+              <View className="mt-4 p-4 bg-[#001724] rounded-xl border border-[#f5b212]/50 items-center">
+                <Text className="text-[10px] text-gray-400 font-semibold tracking-wider uppercase mb-1">
+                  Your 6-Character Pairing Code
+                </Text>
+                <Text className="text-2xl font-black text-[#f5b212] tracking-widest selectable font-mono">
                   {generatedCode}
                 </Text>
-                <Text className="text-[11px] text-gray-400 mt-2 text-center">
-                  Share this code with your partner. Realtime listener active — waiting for partner to connect...
-                </Text>
+                <View className="flex-row items-center mt-2">
+                  <View className="w-2 h-2 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+                  <Text className="text-[11px] text-emerald-400 font-medium">
+                    Listening for partner connection...
+                  </Text>
+                </View>
               </View>
             )}
           </View>
 
-          {/* Divider */}
-          <View className="flex-row items-center my-4">
-            <View className="flex-1 h-[1px] bg-gray-700" />
-            <Text className="mx-4 text-xs font-bold text-gray-400 tracking-wider">
-              OR JOIN EXISTING
+          {/* Step 2: Join Partner Card */}
+          <View className="bg-[#002236] border border-gray-800 rounded-2xl p-5 shadow-xl">
+            <View className="flex-row items-center mb-1">
+              <View className="w-5 h-5 rounded-full bg-gray-600 items-center justify-center mr-2">
+                <Text className="text-white font-black text-xs">2</Text>
+              </View>
+              <Text className="text-white font-bold text-sm tracking-wide">
+                Step 2: Enter your partner's Link
+              </Text>
+            </View>
+            <Text className="text-[11px] text-gray-400 mb-4 pl-7">
+              If your partner already generated a code, enter it below to complete the handshake.
             </Text>
-            <View className="flex-1 h-[1px] bg-gray-700" />
-          </View>
 
-          {/* Section 2: Join Partner */}
-          <View className="mt-2">
-            <Text className="text-white font-semibold text-base mb-2">
-              Join Partner
-            </Text>
             <TextInput
               value={partnerCode}
               onChangeText={setPartnerCode}
-              placeholder="e.g. 7XK9A2"
+              placeholder="ENTER 6-DIGIT CODE"
               placeholderTextColor="#64748b"
               autoCapitalize="characters"
               autoCorrect={false}
               maxLength={6}
-              className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3.5 rounded-xl text-base mb-3 font-mono tracking-widest text-center"
+              className="bg-[#001724] border border-gray-700 focus:border-[#f5b212] text-white px-4 py-3 rounded-xl text-base mb-3 font-mono tracking-widest text-center font-bold"
             />
+
             <TouchableOpacity
               onPress={handleJoinPartner}
               disabled={isJoining}
-              activeOpacity={0.8}
-              className="border border-[#f5b212] py-3.5 rounded-xl items-center justify-center bg-[#f5b212]/10"
+              activeOpacity={0.82}
+              className="border border-[#f5b212] bg-[#f5b212]/10 py-3.5 rounded-xl items-center justify-center"
             >
               {isJoining ? (
                 <ActivityIndicator color="#f5b212" />
               ) : (
-                <Text className="text-[#f5b212] font-semibold text-base tracking-wide">
-                  Connect Partner
+                <Text className="text-[#f5b212] font-black text-sm uppercase tracking-wider">
+                  Connect to Partner
                 </Text>
               )}
             </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Footer Status */}
-        <View className="mt-8 items-center">
-          <Text className="text-xs text-gray-500">
-            Encrypted End-to-End • Supabase Realtime Active
-          </Text>
-        </View>
+          {/* Footer Security Badge */}
+          <View className="mt-8 items-center">
+            <Text className="text-[11px] text-gray-500 font-medium">
+              🔒 End-to-End Encrypted • Row-Level Security Enabled
+            </Text>
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
