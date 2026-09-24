@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,13 @@ import {
   Image,
   Alert,
   ActivityIndicator,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 import { fetchInstalledApps, InstalledApp } from '../lib/NativeInstalledApps';
+import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
 export function AppSelector() {
   const pairingId = useAuthStore((state) => state.pairingId);
@@ -26,7 +29,37 @@ export function AppSelector() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch live non-system installed apps on mount via Android bridge
+  // Security Clearance State
+  const [permissions, setPermissions] = useState<SpecialPermissionsStatus>({
+    hasOverlay: true,
+    hasUsage: true,
+  });
+
+  const checkPermissions = useCallback(async () => {
+    try {
+      const status = await NativePermissions.checkSpecialPermissions();
+      setPermissions(status);
+    } catch (err) {
+      console.warn('[AppSelector] Failed checking permissions:', err);
+    }
+  }, []);
+
+  // Check permissions on mount and whenever returning from Android Settings
+  useEffect(() => {
+    checkPermissions();
+
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        checkPermissions();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [checkPermissions]);
+
+  // Fetch live non-system installed apps on mount via guarded Android bridge
   useEffect(() => {
     let isMounted = true;
 
@@ -38,10 +71,10 @@ export function AppSelector() {
           setInstalledApps(apps);
         }
       } catch (err: any) {
-        Alert.alert(
-          'Query Error',
-          err?.message || 'Could not query installed applications on this device.'
-        );
+        console.warn('[AppSelector] Graceful catch: could not query installed applications:', err);
+        if (isMounted) {
+          setInstalledApps([]);
+        }
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -82,6 +115,10 @@ export function AppSelector() {
     }
   };
 
+  const handleGrantPermissions = async () => {
+    await NativePermissions.requestSpecialPermissions();
+  };
+
   const handleConfirmTargets = async () => {
     if (localSelection.length === 0) {
       Alert.alert(
@@ -91,6 +128,22 @@ export function AppSelector() {
       return;
     }
 
+    if (!permissions.hasOverlay || !permissions.hasUsage) {
+      Alert.alert(
+        'Permissions Incomplete',
+        'System Alert Window and Usage Access clearances are required for the accountability overlay to engage. Please grant clearances before launching.',
+        [
+          { text: 'Grant Now', onPress: handleGrantPermissions },
+          { text: 'Continue Anyway', onPress: () => persistTargets(), style: 'destructive' },
+        ]
+      );
+      return;
+    }
+
+    await persistTargets();
+  };
+
+  const persistTargets = async () => {
     setIsSaving(true);
     try {
       if (pairingId) {
@@ -115,6 +168,8 @@ export function AppSelector() {
       setIsSaving(false);
     }
   };
+
+  const hasMissingPermissions = !permissions.hasOverlay || !permissions.hasUsage;
 
   return (
     <SafeAreaView className="flex-1 bg-[#003049]">
@@ -143,6 +198,66 @@ export function AppSelector() {
             Select installed applications that will trigger the lockdown overlay when launched.
           </Text>
 
+          {/* High-Priority Security Clearance Banner */}
+          {hasMissingPermissions && (
+            <View className="mt-3 p-4 bg-amber-950/40 border border-[#f5b212] rounded-2xl shadow-lg">
+              <View className="flex-row items-center mb-1">
+                <Text className="text-sm font-black text-[#f5b212] tracking-wider uppercase">
+                  ⚠️ Security Clearance Required
+                </Text>
+              </View>
+              <Text className="text-[11px] text-gray-300 mb-3 leading-4">
+                To detect unauthorized app launches and draw the lockdown overlay, grant the required OS permissions.
+              </Text>
+
+              <View className="flex-row gap-2 mb-3">
+                <View
+                  className={`flex-1 px-2.5 py-1.5 rounded-lg border flex-row items-center justify-between ${
+                    permissions.hasOverlay
+                      ? 'bg-emerald-950/30 border-emerald-500/40'
+                      : 'bg-red-950/30 border-red-500/40'
+                  }`}
+                >
+                  <Text className="text-[10px] text-white font-medium">Draw Over Apps</Text>
+                  <Text
+                    className={`text-[10px] font-bold ${
+                      permissions.hasOverlay ? 'text-emerald-400' : 'text-red-400'
+                    }`}
+                  >
+                    {permissions.hasOverlay ? 'GRANTED' : 'MISSING'}
+                  </Text>
+                </View>
+
+                <View
+                  className={`flex-1 px-2.5 py-1.5 rounded-lg border flex-row items-center justify-between ${
+                    permissions.hasUsage
+                      ? 'bg-emerald-950/30 border-emerald-500/40'
+                      : 'bg-red-950/30 border-red-500/40'
+                  }`}
+                >
+                  <Text className="text-[10px] text-white font-medium">Usage Access</Text>
+                  <Text
+                    className={`text-[10px] font-bold ${
+                      permissions.hasUsage ? 'text-emerald-400' : 'text-red-400'
+                    }`}
+                  >
+                    {permissions.hasUsage ? 'GRANTED' : 'MISSING'}
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={handleGrantPermissions}
+                activeOpacity={0.85}
+                className="bg-[#f5b212] py-2.5 rounded-xl items-center justify-center shadow-md"
+              >
+                <Text className="text-[#003049] font-black text-xs uppercase tracking-wider">
+                  Grant OS Security Clearances
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Search Filter */}
           <TextInput
             value={searchQuery}
@@ -154,7 +269,7 @@ export function AppSelector() {
           />
         </View>
 
-        {/* Apps List or Loader */}
+        {/* Apps List or Loader / Empty State */}
         {isLoading ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color="#f5b212" />
@@ -165,10 +280,10 @@ export function AppSelector() {
         ) : filteredApps.length === 0 ? (
           <View className="flex-1 items-center justify-center px-4">
             <Text className="text-base font-bold text-gray-300 text-center">
-              No matching applications found
+              No Applications Detected
             </Text>
-            <Text className="text-xs text-gray-500 text-center mt-1">
-              Ensure you have user-installed applications on the device.
+            <Text className="text-xs text-gray-500 text-center mt-1 max-w-[260px]">
+              If testing on a custom build, verify your APK includes InstalledAppsModule or install third-party apps on the emulator.
             </Text>
           </View>
         ) : (

@@ -6,27 +6,31 @@ export interface InstalledApp {
   icon?: string; // Base64-encoded PNG thumbnail
 }
 
-interface InstalledAppsInterface {
+export interface InstalledAppsInterface {
   getNonSystemApps(): Promise<InstalledApp[]>;
 }
 
-const { InstalledApps } = NativeModules;
+// Extract native module with optional chaining
+const rawInstalledApps = NativeModules?.InstalledApps;
 
-export const NativeInstalledApps = InstalledApps as InstalledAppsInterface | undefined;
-
-export async function fetchInstalledApps(): Promise<InstalledApp[]> {
-  if (Platform.OS === 'android' && NativeInstalledApps?.getNonSystemApps) {
-    try {
-      const apps = await NativeInstalledApps.getNonSystemApps();
-      return apps.sort((a, b) => a.appName.localeCompare(b.appName));
-    } catch (err) {
-      console.error('[NativeInstalledApps] Error fetching non-system apps:', err);
-      throw err;
+// Exported object: if native module is absent from the binary, gracefully degrade
+export const NativeInstalledApps: InstalledAppsInterface = {
+  getNonSystemApps: async (): Promise<InstalledApp[]> => {
+    if (Platform.OS === 'android' && rawInstalledApps?.getNonSystemApps) {
+      try {
+        const apps = await rawInstalledApps.getNonSystemApps();
+        return Array.isArray(apps) ? apps.sort((a, b) => a.appName.localeCompare(b.appName)) : [];
+      } catch (err) {
+        console.warn('[NativeInstalledApps] Execution error querying native apps:', err);
+        return [];
+      }
     }
-  }
 
-  console.warn('[NativeInstalledApps] Native module unavailable or not running on Android.');
-  return [];
-}
+    console.warn('[NativeInstalledApps] Native module missing on this binary');
+    return [];
+  },
+};
+
+export const fetchInstalledApps = NativeInstalledApps.getNonSystemApps;
 
 export default NativeInstalledApps;
