@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 
 export interface CatalogApp {
@@ -6,9 +8,13 @@ export interface CatalogApp {
   packageName: string;
 }
 
+export type PairingMode = 'Mutual' | 'Warden' | 'Prisoner';
+
 interface AuthState {
   session: Session | null;
   pairingId: string | null;
+  pairingCode: string | null;
+  pairingMode: PairingMode | null;
   userRole: 'user_1' | 'user_2' | null;
   selectedApps: string[];
   partnerCatalog: CatalogApp[];
@@ -16,8 +22,14 @@ interface AuthState {
   partnerTargets: string[];
   isAppsConfigured: boolean;
   isLockdownActive: boolean;
+  isLocked: boolean; // Remote lock status synced with Supabase is_locked
+  bypassPin: string | null;
+  hasHydrated: boolean;
+
   setSession: (session: Session | null) => void;
   setPairingId: (pairingId: string | null) => void;
+  setPairingCode: (code: string | null) => void;
+  setPairingMode: (mode: PairingMode | null) => void;
   setUserRole: (role: 'user_1' | 'user_2' | null) => void;
   setSelectedApps: (apps: string[]) => void;
   setPartnerCatalog: (catalog: CatalogApp[]) => void;
@@ -25,40 +37,80 @@ interface AuthState {
   setPartnerTargets: (targets: string[]) => void;
   setIsAppsConfigured: (isConfigured: boolean) => void;
   setIsLockdownActive: (isActive: boolean) => void;
+  setIsLocked: (isLocked: boolean) => void;
+  setBypassPin: (pin: string | null) => void;
+  setHasHydrated: (hydrated: boolean) => void;
+  resetPairing: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  session: null,
-  pairingId: null,
-  userRole: null,
-  selectedApps: [],
-  partnerCatalog: [],
-  myTargets: [],
-  partnerTargets: [],
-  isAppsConfigured: false,
-  isLockdownActive: false,
-  setSession: (session) => set({ session }),
-  setPairingId: (pairingId) =>
-    set((state) => ({
-      pairingId,
-      // If unpairing, clear app selection state and deactivate lockdown
-      ...(pairingId === null
-        ? {
-            userRole: null,
-            selectedApps: [],
-            partnerCatalog: [],
-            myTargets: [],
-            partnerTargets: [],
-            isAppsConfigured: false,
-            isLockdownActive: false,
-          }
-        : {}),
-    })),
-  setUserRole: (userRole) => set({ userRole }),
-  setSelectedApps: (selectedApps) => set({ selectedApps }),
-  setPartnerCatalog: (partnerCatalog) => set({ partnerCatalog }),
-  setMyTargets: (myTargets) => set({ myTargets }),
-  setPartnerTargets: (partnerTargets) => set({ partnerTargets }),
-  setIsAppsConfigured: (isAppsConfigured) => set({ isAppsConfigured }),
-  setIsLockdownActive: (isLockdownActive) => set({ isLockdownActive }),
-}));
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      session: null,
+      pairingId: null,
+      pairingCode: null,
+      pairingMode: null,
+      userRole: null,
+      selectedApps: [],
+      partnerCatalog: [],
+      myTargets: [],
+      partnerTargets: [],
+      isAppsConfigured: false,
+      isLockdownActive: false,
+      isLocked: false,
+      bypassPin: null,
+      hasHydrated: false,
+
+      setSession: (session) => set({ session }),
+      setPairingId: (pairingId) => set({ pairingId }),
+      setPairingCode: (pairingCode) => set({ pairingCode }),
+      setPairingMode: (pairingMode) => set({ pairingMode }),
+      setUserRole: (userRole) => set({ userRole }),
+      setSelectedApps: (selectedApps) => set({ selectedApps }),
+      setPartnerCatalog: (partnerCatalog) => set({ partnerCatalog }),
+      setMyTargets: (myTargets) => set({ myTargets }),
+      setPartnerTargets: (partnerTargets) => set({ partnerTargets }),
+      setIsAppsConfigured: (isAppsConfigured) => set({ isAppsConfigured }),
+      setIsLockdownActive: (isLockdownActive) => set({ isLockdownActive }),
+      setIsLocked: (isLocked) => set({ isLocked }),
+      setBypassPin: (bypassPin) => set({ bypassPin }),
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
+
+      resetPairing: () =>
+        set({
+          pairingId: null,
+          pairingCode: null,
+          pairingMode: null,
+          userRole: null,
+          selectedApps: [],
+          partnerCatalog: [],
+          myTargets: [],
+          partnerTargets: [],
+          isAppsConfigured: false,
+          isLockdownActive: false,
+          isLocked: false,
+          bypassPin: null,
+        }),
+    }),
+    {
+      name: 'accountability-auth-storage',
+      storage: createJSONStorage(() => AsyncStorage),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+      partialize: (state) => ({
+        pairingId: state.pairingId,
+        pairingCode: state.pairingCode,
+        pairingMode: state.pairingMode,
+        userRole: state.userRole,
+        selectedApps: state.selectedApps,
+        partnerCatalog: state.partnerCatalog,
+        myTargets: state.myTargets,
+        partnerTargets: state.partnerTargets,
+        isAppsConfigured: state.isAppsConfigured,
+        isLockdownActive: state.isLockdownActive,
+        isLocked: state.isLocked,
+      }),
+    }
+  )
+);

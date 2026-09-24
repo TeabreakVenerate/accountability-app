@@ -17,7 +17,11 @@ import { useAuthStore, CatalogApp } from '../store/useAuthStore';
 import { fetchInstalledApps, InstalledApp } from '../lib/NativeInstalledApps';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
-export function AppSelector() {
+interface AppSelectorProps {
+  onBack?: () => void;
+}
+
+export function AppSelector({ onBack }: AppSelectorProps = {}) {
   const pairingId = useAuthStore((state) => state.pairingId);
   const userRole = useAuthStore((state) => state.userRole);
   const setUserRole = useAuthStore((state) => state.setUserRole);
@@ -321,10 +325,21 @@ export function AppSelector() {
         {/* Header Flow Info */}
         <View className="mb-3">
           <View className="flex-row items-center justify-between mb-2">
-            <View className="bg-[#002236] border border-[#f5b212]/30 px-3 py-1 rounded-full">
-              <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-wider">
-                Step 2 of 2 • Boundary Setup
-              </Text>
+            <View className="flex-row items-center">
+              {onBack && (
+                <TouchableOpacity
+                  onPress={onBack}
+                  activeOpacity={0.7}
+                  className="bg-[#002236] border border-[#f5b212]/40 px-2.5 py-1 rounded-lg mr-2"
+                >
+                  <Text className="text-xs font-bold text-[#f5b212]">← Back</Text>
+                </TouchableOpacity>
+              )}
+              <View className="bg-[#002236] border border-[#f5b212]/30 px-3 py-1 rounded-full">
+                <Text className="text-[10px] font-bold text-[#f5b212] uppercase tracking-wider">
+                  Boundary Setup
+                </Text>
+              </View>
             </View>
             <TouchableOpacity onPress={handleSelectAll} activeOpacity={0.7}>
               <Text className="text-xs text-[#f5b212] font-semibold underline">
