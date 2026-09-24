@@ -32,6 +32,7 @@ export function PairingScreen() {
   const [isJoining, setIsJoining] = useState(false);
 
   const setPairingId = useAuthStore((state) => state.setPairingId);
+  const setUserRole = useAuthStore((state) => state.setUserRole);
 
   // Lifecycle Management: Channel subscription tied to activePairingRowId
   useEffect(() => {
@@ -111,6 +112,7 @@ export function PairingScreen() {
       }
 
       setGeneratedCode(code);
+      setUserRole('user_1');
       setActivePairingRowId(data.id);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to generate invite code.');
@@ -164,7 +166,8 @@ export function PairingScreen() {
         return;
       }
 
-      // Update Zustand store to advance router
+      // Update Zustand store with role and pairingId to advance router
+      setUserRole('user_2');
       setPairingId(data.id);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator } from 'react-native';
 import { useAuthStore } from '../store/useAuthStore';
 import { supabase } from '../lib/supabase';
@@ -7,27 +7,100 @@ import { NativeSentinel } from '../lib/NativeSentinel';
 export function Dashboard() {
   const pairingId = useAuthStore((state) => state.pairingId);
   const setPairingId = useAuthStore((state) => state.setPairingId);
-  const selectedApps = useAuthStore((state) => state.selectedApps);
+  const userRole = useAuthStore((state) => state.userRole);
+  const setUserRole = useAuthStore((state) => state.setUserRole);
+  const myTargets = useAuthStore((state) => state.myTargets);
+  const setMyTargets = useAuthStore((state) => state.setMyTargets);
+  const partnerTargets = useAuthStore((state) => state.partnerTargets);
+  const setPartnerTargets = useAuthStore((state) => state.setPartnerTargets);
   const setIsAppsConfigured = useAuthStore((state) => state.setIsAppsConfigured);
   const isLockdownActive = useAuthStore((state) => state.isLockdownActive);
   const setIsLockdownActive = useAuthStore((state) => state.setIsLockdownActive);
 
   const [isTogglingLock, setIsTogglingLock] = useState(false);
 
-  // Sync with native sentinel status on mount
+  // Sync initial targets and user role from Supabase
+  const loadPairingTargets = useCallback(async () => {
+    if (!pairingId) return;
+
+    try {
+      const { data: pairing } = await supabase
+        .from('pairings')
+        .select('*')
+        .eq('id', pairingId)
+        .maybeSingle();
+
+      if (!pairing) return;
+
+      const { data: userData } = await supabase.auth.getUser();
+      const role = userRole || (userData?.user?.id === pairing.user_1_id ? 'user_1' : 'user_2');
+      if (!userRole) setUserRole(role);
+
+      const localTargets = role === 'user_1' ? pairing.user_1_targets : pairing.user_2_targets;
+      const remoteTargets = role === 'user_1' ? pairing.user_2_targets : pairing.user_1_targets;
+
+      if (Array.isArray(localTargets)) setMyTargets(localTargets);
+      if (Array.isArray(remoteTargets)) setPartnerTargets(remoteTargets);
+    } catch (err) {
+      console.warn('[Dashboard] Failed loading targets:', err);
+    }
+  }, [pairingId, userRole, setUserRole, setMyTargets, setPartnerTargets]);
+
+  // Sync with native sentinel status on mount & set up Realtime listener
   useEffect(() => {
+    loadPairingTargets();
+
     NativeSentinel.isSentinelRunning().then((running) => {
       if (running && !isLockdownActive) {
         setIsLockdownActive(true);
       }
     });
-  }, [isLockdownActive, setIsLockdownActive]);
+
+    if (!pairingId) return;
+
+    // Listen for remote updates to my targets by partner
+    const channel = supabase
+      .channel(`dashboard-targets:${pairingId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'pairings',
+          filter: `id=eq.${pairingId}`,
+        },
+        async (payload) => {
+          const row = payload.new as any;
+          if (!row) return;
+
+          const role = userRole || 'user_1';
+          const updatedMyTargets = role === 'user_1' ? row.user_1_targets : row.user_2_targets;
+          const updatedPartnerTargets = role === 'user_1' ? row.user_2_targets : row.user_1_targets;
+
+          if (Array.isArray(updatedMyTargets)) {
+            setMyTargets(updatedMyTargets);
+            // If sentinel is actively monitoring, update its target package list in real-time
+            if (isLockdownActive) {
+              await NativeSentinel.startSentinel(updatedMyTargets);
+            }
+          }
+          if (Array.isArray(updatedPartnerTargets)) {
+            setPartnerTargets(updatedPartnerTargets);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [pairingId, loadPairingTargets, isLockdownActive, setIsLockdownActive, userRole, setMyTargets, setPartnerTargets]);
 
   const handleToggleLockdown = async () => {
-    if (selectedApps.length === 0) {
+    if (myTargets.length === 0) {
       Alert.alert(
-        'No Target Apps',
-        'Please configure target applications before engaging lockdown.',
+        'No Local Restrictions',
+        'Your device has no restricted target apps set yet. Configure target apps to enable lockdown enforcement.',
         [{ text: 'Configure', onPress: () => setIsAppsConfigured(false) }]
       );
       return;
@@ -36,12 +109,12 @@ export function Dashboard() {
     setIsTogglingLock(true);
     try {
       if (!isLockdownActive) {
-        // Start Native Foreground Sentinel
-        await NativeSentinel.startSentinel(selectedApps);
+        // Start Native Foreground Sentinel strictly on local user's targets
+        await NativeSentinel.startSentinel(myTargets);
         setIsLockdownActive(true);
         Alert.alert(
           'LOCKDOWN ENGAGED',
-          `Lockdown Sentinel is actively monitoring ${selectedApps.length} target applications in the background. Unauthorized launches will trigger the native overlay.`
+          `Sentinel is actively monitoring ${myTargets.length} local target applications. Unauthorized launches will trigger the native overlay.`
         );
       } else {
         // Stop Native Foreground Sentinel
@@ -97,7 +170,7 @@ export function Dashboard() {
             <View className="flex-row items-center bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-full">
               <View className="w-2 h-2 rounded-full bg-emerald-400 mr-2 shadow-sm" />
               <Text className="text-emerald-400 font-semibold text-[11px] tracking-wider uppercase">
-                Peer Secure
+                Peer Secure ({userRole === 'user_1' ? 'User 1' : 'User 2'})
               </Text>
             </View>
 
@@ -136,15 +209,14 @@ export function Dashboard() {
 
             <View className="h-[1px] bg-gray-800 my-2" />
 
-            <View className="flex-row justify-between items-center">
+            {/* Local Restrictions */}
+            <View className="flex-row justify-between items-center mb-2">
               <View className="flex-1 mr-3">
                 <Text className="text-white font-bold text-sm">
-                  {selectedApps.length} Target Apps Armed
+                  {myTargets.length} Local Target Apps Locked
                 </Text>
                 <Text className="text-[10px] text-gray-400 mt-0.5" numberOfLines={1}>
-                  {selectedApps.length > 0
-                    ? selectedApps.slice(0, 2).join(', ') + (selectedApps.length > 2 ? '...' : '')
-                    : 'No apps selected'}
+                  Enforced on this device by your partner
                 </Text>
               </View>
               <TouchableOpacity
@@ -153,9 +225,19 @@ export function Dashboard() {
                 className="bg-[#f5b212]/15 border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
               >
                 <Text className="text-xs text-[#f5b212] font-semibold">
-                  Edit Targets
+                  Manage Apps
                 </Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Remote Restrictions */}
+            <View className="pt-2 border-t border-gray-800/60 flex-row justify-between items-center">
+              <Text className="text-[11px] text-gray-400">
+                Partner's Device Restrictions:
+              </Text>
+              <Text className="text-[11px] font-bold text-[#f5b212]">
+                {partnerTargets.length} Apps Restricted
+              </Text>
             </View>
           </View>
         </View>
@@ -190,7 +272,7 @@ export function Dashboard() {
                 >
                   {isLockdownActive
                     ? 'Stand Down Foreground Sentinel & Overlay'
-                    : 'Engage Native Overlay & 500ms Sentinel Loop'}
+                    : `Engage Overlay for ${myTargets.length} Local Target Apps`}
                 </Text>
               </>
             )}
@@ -198,7 +280,7 @@ export function Dashboard() {
 
           <Text className="text-xs text-gray-400 mt-4 text-center px-4 leading-4">
             {isLockdownActive
-              ? 'Lockdown active: Opening any targeted package will instantly draw the full-screen native lockout overlay.'
+              ? 'Lockdown active: Opening any of your restricted packages will immediately draw the native lockout overlay.'
               : 'Pressing Initiate starts the native foreground service to poll UsageStats and enforce full-screen boundaries.'}
           </Text>
         </View>
