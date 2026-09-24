@@ -1,7 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 
 export interface SentinelModuleInterface {
-  startSentinel(targetPackages: string[]): Promise<boolean>;
+  startSentinel(targetPackages: string[], isLocked?: boolean, unlockTimestamp?: number): Promise<boolean>;
   stopSentinel(): Promise<boolean>;
   isSentinelRunning(): Promise<boolean>;
 }
@@ -11,13 +11,26 @@ const rawSentinelModule = NativeModules?.SentinelModule;
 
 // Exported object: if native module is absent on the binary, gracefully degrade
 export const NativeSentinel: SentinelModuleInterface = {
-  startSentinel: async (targetPackages: string[]): Promise<boolean> => {
-    if (Platform.OS === 'android' && rawSentinelModule?.startSentinel) {
-      try {
-        return await rawSentinelModule.startSentinel(targetPackages);
-      } catch (err) {
-        console.warn('[NativeSentinel] Error starting Sentinel service:', err);
-        return false;
+  startSentinel: async (
+    targetPackages: string[],
+    isLocked: boolean = true,
+    unlockTimestamp: number = -1
+  ): Promise<boolean> => {
+    if (Platform.OS === 'android') {
+      if (rawSentinelModule?.startSentinelWithOptions) {
+        try {
+          return await rawSentinelModule.startSentinelWithOptions(targetPackages, isLocked, unlockTimestamp);
+        } catch (err) {
+          console.warn('[NativeSentinel] Error starting Sentinel service with options:', err);
+          return false;
+        }
+      } else if (rawSentinelModule?.startSentinel) {
+        try {
+          return await rawSentinelModule.startSentinel(targetPackages);
+        } catch (err) {
+          console.warn('[NativeSentinel] Error starting Sentinel service:', err);
+          return false;
+        }
       }
     }
 

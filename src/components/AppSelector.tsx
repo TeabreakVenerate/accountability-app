@@ -51,6 +51,7 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
   const [permissions, setPermissions] = useState<SpecialPermissionsStatus>({
     hasOverlay: true,
     hasUsage: true,
+    hasBatteryExemption: true,
   });
 
   const checkPermissions = useCallback(async () => {
@@ -317,7 +318,8 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
     }
   };
 
-  const hasMissingPermissions = !permissions.hasOverlay || !permissions.hasUsage;
+  const hasMissingPermissions =
+    !permissions.hasOverlay || !permissions.hasUsage || !permissions.hasBatteryExemption;
 
   return (
     <SafeAreaView className="flex-1 bg-[#003049]">
@@ -399,7 +401,7 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
             <View className="mt-3 p-3 bg-amber-950/40 border border-[#f5b212] rounded-xl flex-row items-center justify-between">
               <View className="flex-1 mr-2">
                 <Text className="text-xs font-bold text-[#f5b212]">OS Clearances Required</Text>
-                <Text className="text-[10px] text-gray-300">Overlay & Usage Access needed</Text>
+                <Text className="text-[10px] text-gray-300">Overlay, Usage & Battery Exemption needed</Text>
               </View>
               <TouchableOpacity
                 onPress={() => NativePermissions.requestSpecialPermissions()}

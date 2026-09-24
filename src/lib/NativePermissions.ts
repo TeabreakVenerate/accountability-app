@@ -3,6 +3,7 @@ import { NativeModules, Platform } from 'react-native';
 export interface SpecialPermissionsStatus {
   hasOverlay: boolean;
   hasUsage: boolean;
+  hasBatteryExemption: boolean;
 }
 
 export interface PermissionsModuleInterface {
@@ -10,6 +11,7 @@ export interface PermissionsModuleInterface {
   requestSpecialPermissions(): Promise<boolean>;
   requestOverlayPermission(): Promise<boolean>;
   requestUsagePermission(): Promise<boolean>;
+  requestBatteryExemption(): Promise<boolean>;
 }
 
 // Extract native module with optional chaining
@@ -20,15 +22,20 @@ export const NativePermissions: PermissionsModuleInterface = {
   checkSpecialPermissions: async (): Promise<SpecialPermissionsStatus> => {
     if (Platform.OS === 'android' && rawPermissionsModule?.checkSpecialPermissions) {
       try {
-        return await rawPermissionsModule.checkSpecialPermissions();
+        const res = await rawPermissionsModule.checkSpecialPermissions();
+        return {
+          hasOverlay: Boolean(res?.hasOverlay),
+          hasUsage: Boolean(res?.hasUsage),
+          hasBatteryExemption: Boolean(res?.hasBatteryExemption),
+        };
       } catch (err) {
         console.warn('[NativePermissions] Execution error checking permissions:', err);
-        return { hasOverlay: false, hasUsage: false };
+        return { hasOverlay: false, hasUsage: false, hasBatteryExemption: false };
       }
     }
 
     console.warn('[NativePermissions] Native module missing on this binary');
-    return { hasOverlay: false, hasUsage: false };
+    return { hasOverlay: false, hasUsage: false, hasBatteryExemption: false };
   },
 
   requestSpecialPermissions: async (): Promise<boolean> => {
@@ -63,6 +70,18 @@ export const NativePermissions: PermissionsModuleInterface = {
         return await rawPermissionsModule.requestUsagePermission();
       } catch (err) {
         console.warn('[NativePermissions] Error requesting usage access:', err);
+        return false;
+      }
+    }
+    return false;
+  },
+
+  requestBatteryExemption: async (): Promise<boolean> => {
+    if (Platform.OS === 'android' && rawPermissionsModule?.requestBatteryExemption) {
+      try {
+        return await rawPermissionsModule.requestBatteryExemption();
+      } catch (err) {
+        console.warn('[NativePermissions] Error requesting battery exemption:', err);
         return false;
       }
     }

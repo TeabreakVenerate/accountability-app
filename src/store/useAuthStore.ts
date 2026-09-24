@@ -24,6 +24,7 @@ interface AuthState {
   isLockdownActive: boolean;
   isLocked: boolean; // Remote lock status synced with Supabase is_locked
   bypassPin: string | null;
+  disconnectRequestedAt: string | null; // ISO timestamp for 1-hour rage quit cooldown
   hasHydrated: boolean;
 
   setSession: (session: Session | null) => void;
@@ -39,6 +40,7 @@ interface AuthState {
   setIsLockdownActive: (isActive: boolean) => void;
   setIsLocked: (isLocked: boolean) => void;
   setBypassPin: (pin: string | null) => void;
+  setDisconnectRequestedAt: (timestamp: string | null) => void;
   setHasHydrated: (hydrated: boolean) => void;
   resetPairing: () => void;
 }
@@ -59,6 +61,7 @@ export const useAuthStore = create<AuthState>()(
       isLockdownActive: false,
       isLocked: false,
       bypassPin: null,
+      disconnectRequestedAt: null,
       hasHydrated: false,
 
       setSession: (session) => set({ session }),
@@ -74,6 +77,7 @@ export const useAuthStore = create<AuthState>()(
       setIsLockdownActive: (isLockdownActive) => set({ isLockdownActive }),
       setIsLocked: (isLocked) => set({ isLocked }),
       setBypassPin: (bypassPin) => set({ bypassPin }),
+      setDisconnectRequestedAt: (disconnectRequestedAt) => set({ disconnectRequestedAt }),
       setHasHydrated: (hasHydrated) => set({ hasHydrated }),
 
       resetPairing: () =>
@@ -90,6 +94,7 @@ export const useAuthStore = create<AuthState>()(
           isLockdownActive: false,
           isLocked: false,
           bypassPin: null,
+          disconnectRequestedAt: null,
         }),
     }),
     {
@@ -110,6 +115,7 @@ export const useAuthStore = create<AuthState>()(
         isAppsConfigured: state.isAppsConfigured,
         isLockdownActive: state.isLockdownActive,
         isLocked: state.isLocked,
+        disconnectRequestedAt: state.disconnectRequestedAt,
       }),
     }
   )
