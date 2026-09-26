@@ -13,8 +13,9 @@ import {
   AppStateStatus,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { useAuthStore, CatalogApp } from '../store/useAuthStore';
+import { useAuthStore, CatalogApp, PairingMode } from '../store/useAuthStore';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchInstalledApps, InstalledApp } from '../lib/NativeInstalledApps';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
@@ -23,7 +24,10 @@ interface AppSelectorProps {
 }
 
 export function AppSelector({ onBack }: AppSelectorProps = {}) {
+  const insets = useSafeAreaInsets();
   const pairingId = useAuthStore((state) => state.pairingId);
+  const pairingMode = useAuthStore((state) => state.pairingMode);
+  const setPairingMode = useAuthStore((state) => state.setPairingMode);
   const userRole = useAuthStore((state) => state.userRole);
   const setUserRole = useAuthStore((state) => state.setUserRole);
   const myTargets = useAuthStore((state) => state.myTargets);
@@ -54,6 +58,34 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
     hasUsage: true,
     hasBatteryExemption: true,
   });
+
+  // Strict Role Authority & Tab Visibility Rules
+  // Supports canonical ('Mutual', 'Warden', 'Prisoner') and alternative ('mutual', 'user_1_warden', 'user_2_warden') modes
+  const normalizedMode = (pairingMode || '').toLowerCase();
+
+  const isStrictWarden =
+    (normalizedMode === 'warden' && userRole === 'user_1') ||
+    (normalizedMode === 'prisoner' && userRole === 'user_2') ||
+    (normalizedMode === 'user_1_warden' && userRole === 'user_1') ||
+    (normalizedMode === 'user_2_warden' && userRole === 'user_2');
+
+  const isStrictPrisoner =
+    (normalizedMode === 'prisoner' && userRole === 'user_1') ||
+    (normalizedMode === 'warden' && userRole === 'user_2') ||
+    (normalizedMode === 'user_1_warden' && userRole === 'user_2') ||
+    (normalizedMode === 'user_2_warden' && userRole === 'user_1');
+
+  const isMutual = !isStrictWarden && !isStrictPrisoner;
+
+  // Enforce strict tab view depending on role:
+  // Warden only configures partner_device; Prisoner only configures my_device
+  useEffect(() => {
+    if (isStrictWarden && activeTab !== 'partner_device') {
+      setActiveTab('partner_device');
+    } else if (isStrictPrisoner && activeTab !== 'my_device') {
+      setActiveTab('my_device');
+    }
+  }, [isStrictWarden, isStrictPrisoner, activeTab]);
 
   const checkPermissions = useCallback(async () => {
     try {
@@ -339,14 +371,17 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
     !permissions.hasOverlay || !permissions.hasUsage || !permissions.hasBatteryExemption;
 
   return (
-    <SafeAreaView className="flex-1 bg-[#003049]">
+    <SafeAreaView
+      className="flex-1 bg-[#003049]"
+      style={{ paddingBottom: insets.bottom }}
+    >
       <View className="flex-1 px-6 pt-5 pb-4">
         {/* Header Flow Info */}
         <View className="mb-3">
           <View className="flex-row items-center justify-between mb-2">
             <View className="flex-row items-center">
               <TouchableOpacity
-                onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+                onPress={() => (onBack ? onBack() : router.replace('/(tabs)/dashboard'))}
                 activeOpacity={0.7}
                 className="bg-[#002236] border border-[#f5b212]/40 px-2.5 py-1 rounded-lg mr-2"
               >
@@ -371,45 +406,74 @@ export function AppSelector({ onBack }: AppSelectorProps = {}) {
             Target App Catalog
           </Text>
           <Text className="text-xs text-gray-300 mt-1 leading-4">
-            {activeTab === 'partner_device'
+            {isStrictWarden
+              ? "Warden Mode: Select which apps are restricted on your partner's device."
+              : isStrictPrisoner
+              ? "Prisoner Mode: Your installed apps subject to partner's lockdown enforcement."
+              : activeTab === 'partner_device'
               ? "Select which apps will be locked on your partner's device when accountability engages."
               : "Review and configure target apps installed on your local device."}
           </Text>
 
-          {/* Device Tabs */}
-          <View className="flex-row mt-4 p-1 bg-[#001724] border border-gray-800 rounded-xl">
-            <TouchableOpacity
-              onPress={() => setActiveTab('partner_device')}
-              activeOpacity={0.8}
-              className={`flex-1 py-2.5 rounded-lg items-center justify-center ${
-                activeTab === 'partner_device' ? 'bg-[#f5b212]' : 'bg-transparent'
-              }`}
-            >
-              <Text
-                className={`text-xs font-black uppercase tracking-wider ${
-                  activeTab === 'partner_device' ? 'text-[#003049]' : 'text-gray-400'
+          {/* Device Tabs / Mode Banner */}
+          {isMutual ? (
+            <View className="flex-row mt-4 p-1 bg-[#001724] border border-gray-800 rounded-xl">
+              <TouchableOpacity
+                onPress={() => setActiveTab('partner_device')}
+                activeOpacity={0.8}
+                className={`flex-1 py-2.5 rounded-lg items-center justify-center ${
+                  activeTab === 'partner_device' ? 'bg-[#f5b212]' : 'bg-transparent'
                 }`}
               >
-                Partner's Device
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  className={`text-xs font-black uppercase tracking-wider ${
+                    activeTab === 'partner_device' ? 'text-[#003049]' : 'text-gray-400'
+                  }`}
+                >
+                  Partner's Device
+                </Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={() => setActiveTab('my_device')}
-              activeOpacity={0.8}
-              className={`flex-1 py-2.5 rounded-lg items-center justify-center ${
-                activeTab === 'my_device' ? 'bg-[#f5b212]' : 'bg-transparent'
-              }`}
-            >
-              <Text
-                className={`text-xs font-black uppercase tracking-wider ${
-                  activeTab === 'my_device' ? 'text-[#003049]' : 'text-gray-400'
+              <TouchableOpacity
+                onPress={() => setActiveTab('my_device')}
+                activeOpacity={0.8}
+                className={`flex-1 py-2.5 rounded-lg items-center justify-center ${
+                  activeTab === 'my_device' ? 'bg-[#f5b212]' : 'bg-transparent'
                 }`}
               >
-                My Device
-              </Text>
-            </TouchableOpacity>
-          </View>
+                <Text
+                  className={`text-xs font-black uppercase tracking-wider ${
+                    activeTab === 'my_device' ? 'text-[#003049]' : 'text-gray-400'
+                  }`}
+                >
+                  My Device
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View className="mt-4 p-3 bg-[#001724] border border-[#f5b212]/30 rounded-xl flex-row items-center justify-between">
+              <View className="flex-row items-center flex-1 mr-2">
+                <Text className="text-base mr-2">
+                  {isStrictWarden ? '🛡️' : '🔒'}
+                </Text>
+                <View>
+                  <Text className="text-xs font-black text-white uppercase tracking-wider">
+                    {isStrictWarden ? "Partner's Device Targets" : "My Device Targets"}
+                  </Text>
+                  <Text className="text-[10px] text-gray-400">
+                    {isStrictWarden
+                      ? "Enforcing boundaries on partner's installed applications"
+                      : "Local applications monitored by partner's sentinel"}
+                  </Text>
+                </View>
+              </View>
+              <View className="bg-[#002236] border border-[#f5b212]/50 px-2.5 py-1 rounded-full">
+                <Text className="text-[9px] font-mono font-bold text-[#f5b212] uppercase tracking-wider">
+                  {isStrictWarden ? 'WARDEN' : 'PRISONER'}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Missing Permissions Banner */}
           {hasMissingPermissions && (

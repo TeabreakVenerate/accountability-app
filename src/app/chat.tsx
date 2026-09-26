@@ -1,6 +1,5 @@
-import React from 'react';
-import { ChatInterface } from '../components/ChatInterface';
+import { Redirect } from 'expo-router';
 
 export default function ChatRoute() {
-  return <ChatInterface />;
+  return <Redirect href="/(tabs)/chat" />;
 }

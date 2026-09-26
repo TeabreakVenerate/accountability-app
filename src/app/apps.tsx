@@ -1,6 +1,5 @@
-import React from 'react';
-import { AppSelector } from '../components/AppSelector';
+import { Redirect } from 'expo-router';
 
 export default function AppsRoute() {
-  return <AppSelector />;
+  return <Redirect href="/(tabs)/targets" />;
 }

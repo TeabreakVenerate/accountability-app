@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useAuthStore, PairingMode } from '../store/useAuthStore';
 
@@ -58,6 +59,7 @@ const ROLE_OPTIONS: RoleOption[] = [
 ];
 
 export function PairingScreen({ onBack }: PairingScreenProps) {
+  const insets = useSafeAreaInsets();
   const [partnerCode, setPartnerCode] = useState('');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [activePairingRowId, setActivePairingRowId] = useState<string | null>(null);
@@ -105,7 +107,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
               setPairingMode(row.pairing_mode as PairingMode);
             }
             setPairingId(activePairingRowId);
-            router.push('/dashboard');
+            router.push('/(tabs)/dashboard');
           }
         }
       )
@@ -224,7 +226,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
       setPairingCode(trimmed);
       setPairingMode(serverMode);
       setPairingId(data.id);
-      router.push('/dashboard');
+      router.push('/(tabs)/dashboard');
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect with partner.');
     } finally {
@@ -233,7 +235,10 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#003049]">
+    <SafeAreaView
+      className="flex-1 bg-[#003049]"
+      style={{ paddingBottom: insets.bottom }}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         className="flex-1"
@@ -246,7 +251,7 @@ export function PairingScreen({ onBack }: PairingScreenProps) {
           {/* Header & Back Navigation */}
           <View className="flex-row items-center justify-between mb-4">
             <TouchableOpacity
-              onPress={() => (onBack ? onBack() : router.push('/dashboard'))}
+              onPress={() => (onBack ? onBack() : router.push('/(tabs)/dashboard'))}
               activeOpacity={0.7}
               className="bg-[#002236] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg flex-row items-center"
             >

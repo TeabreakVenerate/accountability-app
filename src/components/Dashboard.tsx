@@ -13,10 +13,12 @@ import {
   AppStateStatus,
 } from 'react-native';
 import { router } from 'expo-router';
-import { useAuthStore, PairingMode } from '../store/useAuthStore';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuthStore, PairingMode, CatalogApp } from '../store/useAuthStore';
 import { supabase } from '../lib/supabase';
 import { NativeSentinel } from '../lib/NativeSentinel';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
+import { fetchInstalledApps } from '../lib/NativeInstalledApps';
 
 // Common elevated card shadow using native style objects (prevents NativeWind dynamic shadow context crash)
 const elevatedCardStyle = {
@@ -45,6 +47,7 @@ const masterButtonStyle = {
 };
 
 export function Dashboard() {
+  const insets = useSafeAreaInsets();
   const pairingId = useAuthStore((state) => state.pairingId);
   const pairingCode = useAuthStore((state) => state.pairingCode);
   const pairingMode = useAuthStore((state) => state.pairingMode);
@@ -70,6 +73,59 @@ export function Dashboard() {
   const [showBypassModal, setShowBypassModal] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
   const [isBypassing, setIsBypassing] = useState(false);
+  const [isRequestingPin, setIsRequestingPin] = useState(false);
+
+  // Module 4: The Silent Catalog Sync - automatically push stripped catalog on active pairing
+  useEffect(() => {
+    if (!pairingId) return;
+
+    let isCancelled = false;
+
+    const performSilentCatalogSync = async () => {
+      try {
+        const { data: pairing, error } = await supabase
+          .from('pairings')
+          .select('user_1_id, status, user_1_catalog, user_2_catalog')
+          .eq('id', pairingId)
+          .maybeSingle();
+
+        if (error || !pairing || pairing.status !== 'active') return;
+
+        const { data: userData } = await supabase.auth.getUser();
+        const role = userRole || (userData?.user?.id === pairing.user_1_id ? 'user_1' : 'user_2');
+        const catalogColumn = role === 'user_1' ? 'user_1_catalog' : 'user_2_catalog';
+
+        // Check if catalog already populated to prevent redundant transfers
+        const existingCatalog = role === 'user_1' ? pairing.user_1_catalog : pairing.user_2_catalog;
+        if (Array.isArray(existingCatalog) && existingCatalog.length > 0) {
+          return;
+        }
+
+        console.log(`[Dashboard] Silent Catalog Sync: fetching apps for ${catalogColumn}...`);
+        const apps = await fetchInstalledApps();
+        if (isCancelled) return;
+
+        const strippedCatalog: CatalogApp[] = apps.map(({ appName, packageName }) => ({
+          appName,
+          packageName,
+        }));
+
+        console.log(`[Dashboard] Silent Catalog Sync: uploading ${strippedCatalog.length} apps to ${catalogColumn}...`);
+        await supabase
+          .from('pairings')
+          .update({ [catalogColumn]: strippedCatalog })
+          .eq('id', pairingId);
+      } catch (err) {
+        console.warn('[Dashboard] Silent Catalog Sync error:', err);
+      }
+    };
+
+    performSilentCatalogSync();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [pairingId, userRole]);
 
   // OS Clearances State
   const [permissions, setPermissions] = useState<SpecialPermissionsStatus>({
@@ -149,8 +205,8 @@ export function Dashboard() {
         setPairingMode(pairing.pairing_mode as PairingMode);
       }
 
-      if (pairing.bypass_pin) {
-        setBypassPin(pairing.bypass_pin);
+      if (pairing.emergency_pin || pairing.bypass_pin) {
+        setBypassPin(pairing.emergency_pin || pairing.bypass_pin);
       }
 
       if (typeof pairing.is_locked === 'boolean') {
@@ -237,8 +293,8 @@ export function Dashboard() {
             setPairingMode(row.pairing_mode as PairingMode);
           }
 
-          if (row.bypass_pin) {
-            setBypassPin(row.bypass_pin);
+          if (row.emergency_pin || row.bypass_pin) {
+            setBypassPin(row.emergency_pin || row.bypass_pin);
           }
 
           if (Array.isArray(updatedMyTargets)) {
@@ -314,7 +370,7 @@ export function Dashboard() {
       Alert.alert(
         'No Target Apps Configured',
         'Configure restricted target apps before engaging lockdown enforcement.',
-        [{ text: 'Manage Apps', onPress: () => router.push('/apps') }]
+        [{ text: 'Manage Apps', onPress: () => router.push('/(tabs)/targets') }]
       );
       return;
     }
@@ -359,6 +415,53 @@ export function Dashboard() {
       Alert.alert('Sentinel Error', err?.message || 'Failed to toggle lockdown state.');
     } finally {
       setIsTogglingLock(false);
+    }
+  };
+
+  // Module 3: Prisoner Action - Request Emergency Bypass PIN Engine
+  const handleRequestEmergencyBypass = async () => {
+    if (!pairingId) return;
+
+    setIsRequestingPin(true);
+    try {
+      // 1. Generate random 4-digit PIN
+      const generatedPin = Math.floor(1000 + Math.random() * 9000).toString();
+
+      // 2. Execute Supabase UPDATE on pairings table setting emergency_pin (with fallback to bypass_pin)
+      const { error: pinError } = await supabase
+        .from('pairings')
+        .update({ emergency_pin: generatedPin, bypass_pin: generatedPin })
+        .eq('id', pairingId);
+
+      if (pinError) {
+        console.warn('[Dashboard] Failed to update emergency_pin, falling back to bypass_pin:', pinError.message);
+        await supabase
+          .from('pairings')
+          .update({ bypass_pin: generatedPin })
+          .eq('id', pairingId);
+      }
+
+      // 3. Execute Supabase INSERT into messages table automatically notifying Warden
+      await supabase.from('messages').insert([
+        {
+          pairing_id: pairingId,
+          sender_id: userRole || 'user_1',
+          message: `🚨 Emergency Bypass Requested. Your partner's PIN is: ${generatedPin}`,
+        },
+      ]);
+
+      // Update local state and reveal verification modal
+      setBypassPin(generatedPin);
+      setShowBypassModal(true);
+
+      Alert.alert(
+        'EMERGENCY REQUEST SENT',
+        `A high-priority override request was dispatched to your partner. Authorized PIN: ${generatedPin}. Enter it into the modal to stand down the lockdown.`
+      );
+    } catch (err: any) {
+      Alert.alert('Request Failed', err?.message || 'Failed to dispatch emergency bypass request.');
+    } finally {
+      setIsRequestingPin(false);
     }
   };
 
@@ -545,7 +648,7 @@ export function Dashboard() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => router.push('/apps')}
+            onPress={() => router.push('/(tabs)/targets')}
             activeOpacity={0.8}
             className="w-full bg-[#002236] border border-[#f5b212]/40 py-3.5 rounded-xl items-center justify-center"
           >
@@ -563,7 +666,7 @@ export function Dashboard() {
     <SafeAreaView className="flex-1 bg-[#003049]">
       <View className="flex-1">
         <ScrollView
-          contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 + insets.bottom }}
           className="px-5 pt-3"
           showsVerticalScrollIndicator={false}
         >
@@ -671,7 +774,7 @@ export function Dashboard() {
             <View className="flex-row gap-3 mb-3">
               {/* Card 1: Monitored Targets */}
               <TouchableOpacity
-                onPress={() => router.push('/apps')}
+                onPress={() => router.push('/(tabs)/targets')}
                 activeOpacity={0.85}
                 className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
                 style={elevatedCardStyle}
@@ -760,7 +863,7 @@ export function Dashboard() {
 
               {/* Card 4: Action Button Routing to Chat */}
               <TouchableOpacity
-                onPress={() => router.push('/chat')}
+                onPress={() => router.push('/(tabs)/chat')}
                 activeOpacity={0.85}
                 className="flex-1 border border-[#f5b212]/30 rounded-2xl p-4 justify-between"
                 style={elevatedCardStyle}
@@ -803,9 +906,9 @@ export function Dashboard() {
           </View>
         </ScrollView>
 
-        {/* MASTER ACTION: Fixed to Bottom Container */}
+        {/* MASTER ACTION: Docked Above ScreenZen Tab Bar */}
         <View
-          className="absolute bottom-0 left-0 right-0 px-5 pt-3 pb-6 border-t border-[#f5b212]/30"
+          className="px-5 pt-3 pb-3 border-t border-[#f5b212]/30"
           style={{ backgroundColor: '#002236' }}
         >
           {isWarden ? (
@@ -847,17 +950,24 @@ export function Dashboard() {
             <View className="w-full">
               {isLocked ? (
                 <TouchableOpacity
-                  onPress={() => setShowBypassModal(true)}
+                  onPress={handleRequestEmergencyBypass}
+                  disabled={isRequestingPin}
                   activeOpacity={0.88}
                   className="w-full bg-[#f5b212] py-4 rounded-xl items-center justify-center border-2 border-amber-400"
                   style={masterButtonStyle}
                 >
-                  <Text className="text-[#003049] font-black text-sm uppercase tracking-widest">
-                    ⚠️ REQUEST EMERGENCY BYPASS
-                  </Text>
-                  <Text className="text-[#003049]/80 font-mono text-[10px] tracking-wider uppercase mt-0.5">
-                    Requires Security PIN • Dispatches Partner Breach Notice
-                  </Text>
+                  {isRequestingPin ? (
+                    <ActivityIndicator color="#003049" />
+                  ) : (
+                    <>
+                      <Text className="text-[#003049] font-black text-sm uppercase tracking-widest">
+                        ⚠️ REQUEST EMERGENCY BYPASS
+                      </Text>
+                      <Text className="text-[#003049]/80 font-mono text-[10px] tracking-wider uppercase mt-0.5">
+                        Generates Security PIN • Transmits Breach Notice to Partner
+                      </Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               ) : (
                 <View className="w-full py-3.5 rounded-xl items-center justify-center bg-[#004060] border border-[#f5b212]/30">
@@ -872,12 +982,13 @@ export function Dashboard() {
           {/* Emergency Bypass secondary trigger for Mutual Mode when locked */}
           {pairingMode === 'Mutual' && isLocked && (
             <TouchableOpacity
-              onPress={() => setShowBypassModal(true)}
+              onPress={handleRequestEmergencyBypass}
+              disabled={isRequestingPin}
               activeOpacity={0.8}
               className="mt-2.5 py-2 rounded-lg items-center justify-center"
             >
               <Text className="text-[#f5b212] font-mono text-xs font-bold uppercase tracking-wider">
-                Emergency PIN Override →
+                Request Emergency PIN Bypass →
               </Text>
             </TouchableOpacity>
           )}

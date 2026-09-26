@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 
@@ -27,6 +28,7 @@ interface ChatInterfaceProps {
 }
 
 export function ChatInterface({ onBack }: ChatInterfaceProps) {
+  const insets = useSafeAreaInsets();
   const pairingId = useAuthStore((state) => state.pairingId);
   const userRole = useAuthStore((state) => state.userRole);
 
@@ -179,7 +181,10 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#003049]">
+    <SafeAreaView
+      className="flex-1 bg-[#003049]"
+      style={{ paddingBottom: insets.bottom }}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1"
@@ -188,7 +193,7 @@ export function ChatInterface({ onBack }: ChatInterfaceProps) {
         <View className="px-5 py-4 border-b border-gray-800/80 bg-[#002236]/90 flex-row items-center justify-between">
           <View className="flex-row items-center flex-1">
             <TouchableOpacity
-              onPress={() => (onBack ? onBack() : router.replace('/dashboard'))}
+              onPress={() => (onBack ? onBack() : router.replace('/(tabs)/dashboard'))}
               activeOpacity={0.7}
               className="mr-3 bg-[#001724] border border-[#f5b212]/40 px-3 py-1.5 rounded-lg"
             >

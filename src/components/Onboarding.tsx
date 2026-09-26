@@ -10,10 +10,12 @@ import {
   Platform,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../store/useAuthStore';
 import { NativePermissions, SpecialPermissionsStatus } from '../lib/NativePermissions';
 
 export function Onboarding() {
+  const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
   const completeOnboarding = useAuthStore((state) => state.completeOnboarding);
   const pairingId = useAuthStore((state) => state.pairingId);
@@ -47,7 +49,7 @@ export function Onboarding() {
   const handleFinishOnboarding = () => {
     completeOnboarding();
     if (pairingId) {
-      router.replace('/dashboard');
+      router.replace('/(tabs)/dashboard');
     } else {
       router.replace('/pairing');
     }
@@ -495,7 +497,10 @@ export function Onboarding() {
         </ScrollView>
 
         {/* Bottom Navigation Buttons */}
-        <View className="pt-3 border-t border-[#f5b212]/20">
+        <View
+          className="pt-3 border-t border-[#f5b212]/20"
+          style={{ paddingBottom: Math.max(insets.bottom, 12) }}
+        >
           <View className="flex-row items-center gap-3">
             {currentStep > 1 && (
               <TouchableOpacity
